@@ -7,7 +7,7 @@ object build extends Build {
     crossVersion := CrossVersion.full,
     version := "0.1.0-SNAPSHOT",
     organization := "org.scalareflect",
-    description := "AST interpreter Project Palladium",
+    description := "AST interpreter for Project Palladium",
     resolvers += Resolver.sonatypeRepo("snapshots"),
     resolvers += Resolver.sonatypeRepo("releases"),
     publishMavenStyle := true,
