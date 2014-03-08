@@ -40,7 +40,7 @@ object build extends Build {
     },
     pomIncludeRepository := { x => false },
     pomExtra := (
-      <url>https://github.com/scalareflect/core</url>
+      <url>https://github.com/scalareflect/interpreter</url>
       <inceptionYear>2014</inceptionYear>
       <licenses>
         <license>
@@ -50,12 +50,12 @@ object build extends Build {
         </license>
       </licenses>
       <scm>
-        <url>git://github.com/scalareflect/core.git</url>
-        <connection>scm:git:git://github.com/scalareflect/core.git</connection>
+        <url>git://github.com/scalareflect/interpreter.git</url>
+        <connection>scm:git:git://github.com/scalareflect/interpreter.git</connection>
       </scm>
       <issueManagement>
         <system>GitHub</system>
-        <url>https://github.com/scalareflect/core/issues</url>
+        <url>https://github.com/scalareflect/interpreter/issues</url>
       </issueManagement>
     ),
     credentials ++= loadCredentials()
