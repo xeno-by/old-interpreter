@@ -29,7 +29,7 @@ abstract class Engine extends InterpreterRequires with Errors {
     case q"$_.this"                           => ???
     case Apply(expr, args)                    => ??? // the q"$expr[..$targs](...$argss)" quasiquote is too high-level for this
     case TypeApply(expr, targs)               => eval(expr, env)
-    case q"$lhs = $rhs"                       => ???
+    case q"$lhs = $rhs"                       => evalAssign(lhs, rhs, env)
     case q"return $expr"                      => ???
     case q"throw $expr"                       => ???
     case q"$expr: $_"                         => eval(expr, env)
@@ -116,6 +116,20 @@ abstract class Engine extends InterpreterRequires with Errors {
     }
     val env2 = env.extend(env1.heap).extend(tree.symbol, vrepr)
     Value.reflect((), env2)
+  }
+
+  def evalAssign(lhs: Tree, rhs: Tree, env: Env): Result = {
+    // note that we don't need to process assignments that are desugared to `update` calls
+    // these end up being processed in evalApply
+    lhs match {
+      case Ident(_) => // local value (things like `x` as in `this.x` have already been desugared by typer)
+        val Result(vrhs, env1) = eval(rhs, env)
+        Value.reflect((), env1.extend(lhs.symbol, vrhs))
+      case Select(qual, _) => // someone's field
+        val Result(vlhs, env1) = eval(lhs, env)
+        val Result(vrhs, env2) = eval(rhs, env1)
+        Value.reflect((), env1.extend(vlhs, lhs.symbol, vrhs))
+    }
   }
 
   def evalBlock(stats: List[Tree], env: Env): Result = {
