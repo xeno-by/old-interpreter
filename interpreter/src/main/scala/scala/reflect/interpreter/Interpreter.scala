@@ -8,7 +8,10 @@ import internal.Engine
 
 trait InterpreterRequires {
   val u: Universe
-  def body(meth: u.MethodSymbol): u.Tree
+  def source(sym: u.Symbol): u.MemberDef
+  implicit class RichSymbol(sym: u.Symbol) {
+    def source = InterpreterRequires.this.source(sym)
+  }
 }
 
 trait InterpreterProvides {
@@ -18,10 +21,18 @@ trait InterpreterProvides {
 
 object interpret {
   def apply(c: Context)(tree: c.Tree): Any = {
+    import c.universe._
     val engine = new {
       val u: c.universe.type = c.universe
     } with Engine with InterpreterRequires with InterpreterProvides {
-      def body(meth: u.MethodSymbol): u.Tree = ??? // not implemented yet
+      def source(sym: Symbol): MemberDef = {
+        // TODO: general case of obtaining TSTs for symbols isn't implemented yet
+        // therefore for now we only support whatever we can find directly in the interpretee
+        // later on this function will be provided by interpretation hosts
+        // so here, in this project, we should not worry about it
+        val result = tree.collect{ case src: MemberDef if src.symbol == sym => src }.headOption
+        result.getOrElse(UnobtainableSource(sym))
+      }
     }
     engine.eval(tree)
   }
