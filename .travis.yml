@@ -1,6 +1,6 @@
 language: scala
 script:
-  - sbt ++$TRAVIS_SCALA_VERSION clean update compile test package publish
+  - sbt ++$TRAVIS_SCALA_VERSION clean update compile test package publishOnlyWhenOnMaster
 scala:
   - 2.11.0-RC1
 jdk:
@@ -12,7 +12,6 @@ notifications:
     - denys.shabalin@typesafe.com
 env:
   global:
-   - MAVEN_SETTINGS_ENV=1
    - SCALAREFLECT_MAVEN_REALM="Sonatype Nexus Repository Manager"
    - SCALAREFLECT_MAVEN_DOMAIN="oss.sonatype.org"
    - secure: "RZv3smnP4+kuCbORF03xhXsGjr035ZZsTxpMtJP6pGthhuZUWR8t87SJjOeIIaPFaCZzlNKpKoCcd6We3G0aY/X5gtxOmz/T18jEKsOfTkgi7hopPEo4ua0ySO0TIAFcFXgKGH9vEpBskm1KD8oYn+u8iS0Qt+QF1G5RIvQ5iiY="
