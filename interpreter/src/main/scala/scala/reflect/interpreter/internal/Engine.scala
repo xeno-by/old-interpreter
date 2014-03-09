@@ -20,7 +20,7 @@ abstract class Engine extends InterpreterRequires with Errors {
   }
 
   def eval(tree: Tree, env: Env): Result = tree match {
-    case EmptyTree                            => ???
+    case EmptyTree                            => eval(q"()", env) // when used in blocks, means "skip that tree", so we evaluate to whatever
     case Literal(_)                           => ???
     case New(_)                               => ???
     case Ident(_)                             => ??? // q"$_" would've matched any tree, not just an ident
@@ -28,11 +28,11 @@ abstract class Engine extends InterpreterRequires with Errors {
     case q"$qual.super[$_].$_"                => ???
     case q"$_.this"                           => ???
     case Apply(expr, args)                    => ??? // the q"$expr[..$targs](...$argss)" quasiquote is too high-level for this
-    case TypeApply(expr, targs)               => ???
+    case TypeApply(expr, targs)               => eval(expr, env)
     case q"$lhs = $rhs"                       => ???
     case q"return $expr"                      => ???
     case q"throw $expr"                       => ???
-    case q"$expr: $_"                         => ???
+    case q"$expr: $_"                         => eval(expr, env)
     // case q"(..$exprs)"                     => never going to happen, because parser desugars these trees into applications
     case q"{ ..$stats }"                      => ???
     case q"if ($cond) $then1 else $else1"     => ???
@@ -45,9 +45,9 @@ abstract class Engine extends InterpreterRequires with Errors {
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
     // case q"new { ..$early } with ..$parents { $self => ..$stats }" => never going to happen in general case, desugared into selects/applications of New
-    case _: ValDef | _: ModuleDef | _: DefDef => ???
-    case _: MemberDef                         => ???
-    case _: Import                            => ???
+    case _: ValDef | _: ModuleDef | _: DefDef => ??? // can't skip these trees, because we need to enter them in scope when interpreting
+    case _: MemberDef                         => eval(q"()", env) // skip these trees, because we have sym.source
+    case _: Import                            => eval(q"()", env) // skip these trees, because it's irrelevant after typer, which has resolved all imports
     case _                                    => UnrecognizedAst(tree)
   }
 
