@@ -23,6 +23,17 @@ abstract class Engine extends InterpreterRequires with Errors {
     case _ => UnrecognizedAst(tree)
   }
 
+  def eval(args: List[Tree], env: Env): Results = {
+    args match {
+      case arg :: tail =>
+        val Result(varg, env1) = eval(arg, env)
+        val Results(vtail, env2) = eval(tail, env1)
+        Results(varg :: vtail, env2)
+      case Nil =>
+        Results(Nil, env)
+    }
+  }
+
   final case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
   final case class Heap() // TODO: figure out the API for the heap
   final case class Env(scope: Scope, heap: Heap)
@@ -36,4 +47,5 @@ abstract class Engine extends InterpreterRequires with Errors {
     }
   }
   final case class Result(value: Value, env: Env)
+  final case class Results(value: List[Value], env: Env)
 }
