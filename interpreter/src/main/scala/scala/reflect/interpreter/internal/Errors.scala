@@ -10,4 +10,6 @@ trait Errors {
   // and let's just use sys.error to facilitate rapid experimentation
 
   def UnobtainableSource(sym: Symbol) = sys.error(s"can't obtain source for $sym")
+
+  def UnattributedAst(culprit: Tree) = sys.error(s"can't interpret unattributed tree $culprit")
 }
