@@ -20,7 +20,35 @@ abstract class Engine extends InterpreterRequires with Errors {
   }
 
   def eval(tree: Tree, env: Env): Result = tree match {
-    case _ => UnrecognizedAst(tree)
+    case EmptyTree                            => ???
+    case Literal(_)                           => ???
+    case New(_)                               => ???
+    case Ident(_)                             => ??? // q"$_" would've matched any tree, not just an ident
+    case q"$qual.$_"                          => ???
+    case q"$qual.super[$_].$_"                => ???
+    case q"$_.this"                           => ???
+    case Apply(expr, args)                    => ??? // the q"$expr[..$targs](...$argss)" quasiquote is too high-level for this
+    case TypeApply(expr, targs)               => ???
+    case q"$lhs = $rhs"                       => ???
+    case q"return $expr"                      => ???
+    case q"throw $expr"                       => ???
+    case q"$expr: $_"                         => ???
+    // case q"(..$exprs)"                     => never going to happen, because parser desugars these trees into applications
+    case q"{ ..$stats }"                      => ???
+    case q"if ($cond) $then1 else $else1"     => ???
+    case q"$scrut match { case ..$cases }"    => ???
+    case q"try $expr catch { case ..$cases } finally $finally1" => ???
+    case q"(..$params) => $body"              => ???
+    // case q"{ case ..$cases }"              => never going to happen, because typer desugars these trees into anonymous class instantiations
+    case q"while ($cond) $body"               => ???
+    case q"do $body while ($cond)"            => ???
+    // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
+    // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
+    // case q"new { ..$early } with ..$parents { $self => ..$stats }" => never going to happen in general case, desugared into selects/applications of New
+    case _: ValDef | _: ModuleDef | _: DefDef => ???
+    case _: MemberDef                         => ???
+    case _: Import                            => ???
+    case _                                    => UnrecognizedAst(tree)
   }
 
   def eval(args: List[Tree], env: Env): Results = {
