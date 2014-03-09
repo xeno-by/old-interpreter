@@ -23,10 +23,10 @@ abstract class Engine extends InterpreterRequires with Errors {
     case EmptyTree                            => eval(q"()", env) // when used in blocks, means "skip that tree", so we evaluate to whatever
     case Literal(_)                           => evalLiteral(tree, env)
     case New(_)                               => ???
-    case Ident(_)                             => ??? // q"$_" would've matched any tree, not just an ident
-    case q"$qual.$_"                          => ???
-    case q"$qual.super[$_].$_"                => ???
-    case q"$_.this"                           => ???
+    case Ident(_)                             => env.lookup(tree.symbol) // q"$_" would've matched any tree, not just an ident
+    case q"$qual.$_"                          => evalSelect(qual, tree.symbol, env)
+    case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
+    case q"$_.this"                           => env.lookup(tree.symbol)
     case Apply(expr, args)                    => ??? // the q"$expr[..$targs](...$argss)" quasiquote is too high-level for this
     case TypeApply(expr, targs)               => eval(expr, env)
     case q"$lhs = $rhs"                       => evalAssign(lhs, rhs, env)
@@ -140,9 +140,22 @@ abstract class Engine extends InterpreterRequires with Errors {
     Result(vstats, env.extend(env1.heap))
   }
 
+  def evalSelect(qual: Tree, sym: Symbol, env: Env): Result = {
+    val Result(vqual, env1) = eval(qual, env)
+    vqual.select(sym, env1)
+  }
+
   final case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
   final case class Heap() // TODO: figure out the API for the heap
   final case class Env(scope: Scope, heap: Heap) {
+    def lookup(sym: Symbol): Result = {
+      // TODO: handle lazy val init
+      // TODO: handle module init
+      // TODO: evaluate nullary methods
+      // all the stuff above might be effectful
+      // therefore we return Result here, and not just Value
+      ???
+    }
     def extend(sym: Symbol, value: Value): Env = {
       // TODO: extend scope with a local symbol bound to an associated value
       ???
@@ -163,6 +176,15 @@ abstract class Engine extends InterpreterRequires with Errors {
       // return None if it refers to a not-yet-compiled class
       // note that it is probably possible to improve reify to work correctly in all cases
       // however this doesn't matter much for Project Palladium, so that's really low priority
+      ???
+    }
+    def select(member: Symbol, env: Env): Result = {
+      // note that we need env here, because selection might be effectful
+      // also note that there's no need to evaluate empty-arglist methods here
+      // if we have an empty-arglist application, then the result of select will be fed into apply(Nil)
+      // TODO: needs to handle selections of field and method references
+      // because e.g. foo.bar(1, 2) looks like Apply(Select(foo, bar), List(1, 2))
+      // TODO: same todos as for Env.lookup
       ???
     }
   }
