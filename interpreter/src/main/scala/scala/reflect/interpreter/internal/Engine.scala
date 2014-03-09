@@ -34,7 +34,7 @@ abstract class Engine extends InterpreterRequires with Errors {
     case q"throw $expr"                       => ???
     case q"$expr: $_"                         => eval(expr, env)
     // case q"(..$exprs)"                     => never going to happen, because parser desugars these trees into applications
-    case q"{ ..$stats }"                      => ???
+    case q"{ ..$stats }"                      => evalBlock(stats, env)
     case q"if ($cond) $then1 else $else1"     => ???
     case q"$scrut match { case ..$cases }"    => ???
     case q"try $expr catch { case ..$cases } finally $finally1" => ???
@@ -86,9 +86,30 @@ abstract class Engine extends InterpreterRequires with Errors {
     }
   }
 
+  def evalBlock(stats: List[Tree], env: Env): Result = {
+    // note how thanks to immutability of envs we don't have problems with local variable scoping
+    // when evaluating a block, we can delegate introduction of locals to eval - it will update env and push the updates to us
+    // when exiting a block, we just drop the local environment that we have accumulated without having to rollback anything
+    val Results(_ :+ vstats, env1) = eval(stats, env)
+    Result(vstats, env.extend(env1.heap))
+  }
+
   final case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
   final case class Heap() // TODO: figure out the API for the heap
-  final case class Env(scope: Scope, heap: Heap)
+  final case class Env(scope: Scope, heap: Heap) {
+    def extend(sym: Symbol, value: Value): Env = {
+      // TODO: extend scope with a local symbol bound to an associated value
+      ???
+    }
+    def extend(obj: Value, field: Symbol, value: Value): Env = {
+      // TODO: extend heap with the new value for the given field of the given object
+      ???
+    }
+    def extend(heap: Heap): Env = {
+      // TODO: import heap from another environment
+      ???
+    }
+  }
 
   sealed trait Value {
     def reify: Option[Any] = {
