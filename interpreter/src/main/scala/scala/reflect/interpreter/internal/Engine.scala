@@ -22,7 +22,7 @@ abstract class Engine extends InterpreterRequires with Errors {
   def eval(tree: Tree, env: Env): Result = tree match {
     case EmptyTree                            => eval(q"()", env) // when used in blocks, means "skip that tree", so we evaluate to whatever
     case Literal(_)                           => evalLiteral(tree, env)
-    case New(_)                               => ???
+    case New(_)                               => Value.instantiate(tree.symbol.asClass, env)
     case Ident(_)                             => env.lookup(tree.symbol) // q"$_" would've matched any tree, not just an ident
     case q"$qual.$_"                          => evalSelect(qual, tree.symbol, env)
     case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
@@ -193,6 +193,11 @@ abstract class Engine extends InterpreterRequires with Errors {
       // TODO: wrap a JVM value in an interpreter value
       // strictly speaking, env is unnecessary here, because this shouldn't be effectful
       // but I'm still threading it though here, because who knows
+      ???
+    }
+    def instantiate(cls: ClassSymbol, env: Env): Result = {
+      // TODO: instantiate a class (not a type like List[Int], but a class like List, because we need to model erasure)
+      // not sure whether we need env, because we don't actually call the constructor here, but let's have it just in case
       ???
     }
     def module(mod: ModuleSymbol, env: Env): Result = {
