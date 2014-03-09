@@ -21,7 +21,7 @@ abstract class Engine extends InterpreterRequires with Errors {
 
   def eval(tree: Tree, env: Env): Result = tree match {
     case EmptyTree                            => eval(q"()", env) // when used in blocks, means "skip that tree", so we evaluate to whatever
-    case Literal(_)                           => ???
+    case Literal(_)                           => evalLiteral(tree, env)
     case New(_)                               => ???
     case Ident(_)                             => ??? // q"$_" would've matched any tree, not just an ident
     case q"$qual.$_"                          => ???
@@ -62,9 +62,34 @@ abstract class Engine extends InterpreterRequires with Errors {
     }
   }
 
+  def evalLiteral(tree: Tree, env: Env): Result = {
+    // this tedious pattern match is here to make sure that
+    // we only support literal types that we are interested in
+    // sure we could say `case Literal(Constant(x)) => reflect(x)`
+    // but that would make evaluation less safe
+    def reflect(jvmValue: Any) = Value.reflect(jvmValue, env)
+    tree match {
+      case q"${x: Byte}"                  => reflect(x)
+      case q"${x: Short}"                 => reflect(x)
+      case q"${x: Char}"                  => reflect(x)
+      case q"${x: Int}"                   => reflect(x)
+      case q"${x: Long}"                  => reflect(x)
+      case q"${x: Float}"                 => reflect(x)
+      case q"${x: Double}"                => reflect(x)
+      case q"${x: Boolean}"               => reflect(x)
+      case q"${x: Unit}"                  => reflect(x)
+      case q"${x: String}"                => reflect(x)
+      case q"null"                        => reflect(null)
+      case Literal(Constant(tpe: Type))   => RuntimeReflectionNotSupported(tree) // this tree shape stands for `classOf[$tpe]` after typechecking
+      case Literal(Constant(sym: Symbol)) => UnrecognizedAst(tree) // this is a very obscure tree shape only used in annotations, and we don't eval those
+      case _                              => UnrecognizedAst(tree)
+    }
+  }
+
   final case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
   final case class Heap() // TODO: figure out the API for the heap
   final case class Env(scope: Scope, heap: Heap)
+
   sealed trait Value {
     def reify: Option[Any] = {
       // TODO: convert this interpreter value to a JVM value
@@ -74,6 +99,15 @@ abstract class Engine extends InterpreterRequires with Errors {
       ???
     }
   }
+  object Value {
+    def reflect(any: Any, env: Env): Result = {
+      // TODO: wrap a JVM value in an interpreter value
+      // strictly speaking, env is unnecessary here, because this shouldn't be effectful
+      // but I'm still threading it though here, because who knows
+      ???
+    }
+  }
+
   final case class Result(value: Value, env: Env)
   final case class Results(value: List[Value], env: Env)
 }
