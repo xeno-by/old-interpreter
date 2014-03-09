@@ -14,6 +14,6 @@ abstract class Engine extends InterpreterRequires with Errors {
       if (sub.tpe == null) UnattributedAst(sub)
       if (sub.symbol == NoSymbol) UnattributedAst(sub)
     })
-    42
+    ???
   }
 }
