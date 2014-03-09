@@ -45,7 +45,7 @@ abstract class Engine extends InterpreterRequires with Errors {
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
     // case q"new { ..$early } with ..$parents { $self => ..$stats }" => never going to happen in general case, desugared into selects/applications of New
-    case _: ValDef | _: ModuleDef | _: DefDef => ??? // can't skip these trees, because we need to enter them in scope when interpreting
+    case _: ValDef | _: ModuleDef | _: DefDef => evalLocal(tree, env) // can't skip these trees, because we need to enter them in scope when interpreting
     case _: MemberDef                         => eval(q"()", env) // skip these trees, because we have sym.source
     case _: Import                            => eval(q"()", env) // skip these trees, because it's irrelevant after typer, which has resolved all imports
     case _                                    => UnrecognizedAst(tree)
@@ -84,6 +84,38 @@ abstract class Engine extends InterpreterRequires with Errors {
       case Literal(Constant(sym: Symbol)) => UnrecognizedAst(tree) // this is a very obscure tree shape only used in annotations, and we don't eval those
       case _                              => UnrecognizedAst(tree)
     }
+  }
+
+  def evalLocal(tree: Tree, env: Env): Result = {
+    val sym = tree.symbol
+    def defaultValue(tpe: Type): Result = {
+      val jvmValue = sym match {
+        case sym if sym == UnitClass    => ()
+        case sym if sym == BooleanClass => false
+        case sym if sym == FloatClass   => 0.0f
+        case sym if sym == DoubleClass  => 0.0d
+        case sym if sym == ByteClass    => 0.toByte
+        case sym if sym == ShortClass   => 0.toShort
+        case sym if sym == IntClass     => 0
+        case sym if sym == LongClass    => 0L
+        case sym if sym == CharClass    => 0.toChar
+        case _                          => null
+      }
+      Value.reflect(jvmValue, env)
+    }
+    val Result(vrepr, env1) = tree match {
+      case ValDef(_, _, tpt, rhs) =>
+        // note how we bind ValDef's name to the default value of the corresponding type when evaluating the rhs
+        // this is how Scala does it, so don't say that this looks weird :)
+        val Result(vdefault, envx) = defaultValue(tpt.tpe)
+        eval(rhs, envx.extend(tree.symbol, vdefault))
+      case tree: ModuleDef =>
+        Value.module(tree.symbol.asModule, env)
+      case tree: DefDef =>
+        Value.method(tree.symbol.asMethod, env)
+    }
+    val env2 = env.extend(env1.heap).extend(tree.symbol, vrepr)
+    Value.reflect((), env2)
   }
 
   def evalBlock(stats: List[Tree], env: Env): Result = {
@@ -125,6 +157,14 @@ abstract class Engine extends InterpreterRequires with Errors {
       // TODO: wrap a JVM value in an interpreter value
       // strictly speaking, env is unnecessary here, because this shouldn't be effectful
       // but I'm still threading it though here, because who knows
+      ???
+    }
+    def module(mod: ModuleSymbol, env: Env): Result = {
+      // TODO: create an interpreter value that corresponds to the object represented by the symbol
+      ???
+    }
+    def method(meth: MethodSymbol, env: Env): Result = {
+      // TODO: create an interpreter value that corresponds to the method represented by the symbol
       ???
     }
   }
