@@ -27,7 +27,7 @@ abstract class Engine extends InterpreterRequires with Errors {
     case q"$qual.$_"                          => evalSelect(qual, tree.symbol, env)
     case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
     case q"$_.this"                           => env.lookup(tree.symbol)
-    case Apply(expr, args)                    => ??? // the q"$expr[..$targs](...$argss)" quasiquote is too high-level for this
+    case Apply(expr, args)                    => evalApply(expr, args, env) // the q"$expr[..$targs](...$argss)" quasiquote is too high-level for this
     case TypeApply(expr, targs)               => eval(expr, env)
     case q"$lhs = $rhs"                       => evalAssign(lhs, rhs, env)
     case q"return $expr"                      => ???
@@ -145,6 +145,15 @@ abstract class Engine extends InterpreterRequires with Errors {
     vqual.select(sym, env1)
   }
 
+  def evalApply(expr: Tree, args: List[Tree], env: Env): Result = {
+    // named and default args are already desugared by scalac, so we just perform straightforward evaluation
+    // TODO: this will not be the case for palladium, but we'll see to that later
+    // TODO: need to handle varargs (represented by q"arg: _*")
+    val Result(vexpr, env1) = eval(expr, env)
+    val Results(vargs, env2) = eval(args, env1)
+    vexpr.apply(vargs, env2)
+  }
+
   final case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
   final case class Heap() // TODO: figure out the API for the heap
   final case class Env(scope: Scope, heap: Heap) {
@@ -185,6 +194,13 @@ abstract class Engine extends InterpreterRequires with Errors {
       // TODO: needs to handle selections of field and method references
       // because e.g. foo.bar(1, 2) looks like Apply(Select(foo, bar), List(1, 2))
       // TODO: same todos as for Env.lookup
+      ???
+    }
+    def apply(args: List[Value], env: Env): Result = {
+      // TODO: needs to work well both with functions and method references
+      // TODO: also has to handle partial applications
+      // TODO: when inside a method application, we should have enclosing this'es bound to corresponding class symbols
+      // TODO: in the current model, constructors have to return the object being constructed
       ???
     }
   }
