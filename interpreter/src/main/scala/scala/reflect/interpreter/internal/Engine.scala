@@ -35,10 +35,10 @@ abstract class Engine extends InterpreterRequires with Errors {
     case q"$expr: $_"                         => eval(expr, env)
     // case q"(..$exprs)"                     => never going to happen, because parser desugars these trees into applications
     case q"{ ..$stats }"                      => evalBlock(stats, env)
-    case q"if ($cond) $then1 else $else1"     => ???
+    case q"if ($cond) $then1 else $else1"     => evalIf(cond, then1, else1, env)
     case q"$scrut match { case ..$cases }"    => ???
     case q"try $expr catch { case ..$cases } finally $finally1" => ???
-    case q"(..$params) => $body"              => ???
+    case q"(..$params) => $body"              => Value.function(params, body, env)
     // case q"{ case ..$cases }"              => never going to happen, because typer desugars these trees into anonymous class instantiations
     case q"while ($cond) $body"               => ???
     case q"do $body while ($cond)"            => ???
@@ -154,6 +154,11 @@ abstract class Engine extends InterpreterRequires with Errors {
     vexpr.apply(vargs, env2)
   }
 
+  def evalIf(cond: Tree, then1: Tree, else1: Tree, env: Env): Result = {
+    val Result(vcond, env1) = eval(cond, env)
+    vcond.branch(eval(then1, env1), eval(else1, env1))
+  }
+
   final case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
   final case class Heap() // TODO: figure out the API for the heap
   final case class Env(scope: Scope, heap: Heap) {
@@ -203,12 +208,21 @@ abstract class Engine extends InterpreterRequires with Errors {
       // TODO: in the current model, constructors have to return the object being constructed
       ???
     }
+    def branch[T](then1: => T, else1: => T): T = {
+      // TODO: should be easy - check whether it's a boolean and then branch appropriately
+      ???
+    }
   }
   object Value {
     def reflect(any: Any, env: Env): Result = {
       // TODO: wrap a JVM value in an interpreter value
       // strictly speaking, env is unnecessary here, because this shouldn't be effectful
       // but I'm still threading it though here, because who knows
+      ???
+    }
+    def function(params: List[Tree], body: Tree, env: Env): Result = {
+      // TODO: wrap a function in an intepreter value using the provided lexical environment
+      // note how useful it is that Env is immutable!
       ???
     }
     def instantiate(cls: ClassSymbol, env: Env): Result = {
