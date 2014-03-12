@@ -12,4 +12,10 @@ trait Errors {
   def UnobtainableSource(sym: Symbol) = sys.error(s"can't obtain source for $sym")
 
   def UnattributedAst(culprit: Tree) = sys.error(s"can't interpret unattributed tree $culprit")
+
+  def UnrecognizedAst(culprit: Tree) = sys.error(s"can't interpret unrecognized tree $culprit")
+
+  def UnreifiableResult(value: Value) = sys.error(s"can't reify evaluation result $value")
+
+  def RuntimeReflectionNotSupported(tree: Tree) = sys.error(s"runtime reflection is not supported: $tree")
 }
