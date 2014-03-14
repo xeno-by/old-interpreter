@@ -2,9 +2,13 @@ package scala.reflect.interpreter
 package internal
 
 abstract class Engine extends InterpreterRequires with Errors {
+  self: Emulators =>
+
+
   import u._
   import definitions._
   import scala.collection.mutable._
+
 
   def eval(tree: Tree): Any = {
     // can only interpret fully attributes trees
@@ -215,8 +219,16 @@ abstract class Engine extends InterpreterRequires with Errors {
     }
   }
 
-  case class JvmValue(val v: Any) extends Value {
+  case class JvmValue(val v: Any) extends Value with ExplicitEmulator{
+    // val e = Engine.this
     override def reify = Some(v)
+    override def select(member:  Symbol, env: Env): Result = {
+      Result(selectCallable(this, member), env)
+    }
+  }
+
+  case class CallableValue() extends Value {
+
   }
 
   object Value {
