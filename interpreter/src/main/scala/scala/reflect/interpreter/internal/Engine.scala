@@ -4,6 +4,7 @@ package internal
 abstract class Engine extends InterpreterRequires with Errors {
   import u._
   import definitions._
+  import scala.collection.mutable._
 
   def eval(tree: Tree): Any = {
     // can only interpret fully attributes trees
@@ -14,7 +15,7 @@ abstract class Engine extends InterpreterRequires with Errors {
       if (sub.tpe == null) UnattributedAst(sub)
       if (sub.symbol == NoSymbol) UnattributedAst(sub)
     })
-    val initialEnv = Env(Scope(), Heap())
+    val initialEnv = Env(Scope(List()), Heap())
     val Result(value, finalEnv) = eval(tree, initialEnv)
     value.reify.getOrElse(UnreifiableResult(value))
   }
@@ -159,7 +160,7 @@ abstract class Engine extends InterpreterRequires with Errors {
     vcond.branch(eval(then1, env1), eval(else1, env1))
   }
 
-  final case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
+  final case class Scope(frame: List[(Symbol, Value)]) // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
   final case class Heap() // TODO: figure out the API for the heap
   final case class Env(scope: Scope, heap: Heap) {
     def lookup(sym: Symbol): Result = {
@@ -168,11 +169,11 @@ abstract class Engine extends InterpreterRequires with Errors {
       // TODO: evaluate nullary methods
       // all the stuff above might be effectful
       // therefore we return Result here, and not just Value
-      ???
+      Result(scope.frame.find( t => t._1 == sym ).get._2, Env(scope, heap))
     }
     def extend(sym: Symbol, value: Value): Env = {
       // TODO: extend scope with a local symbol bound to an associated value
-      ???
+      Env(Scope((sym,value) +: scope.frame), heap)      
     }
     def extend(obj: Value, field: Symbol, value: Value): Env = {
       // TODO: extend heap with the new value for the given field of the given object
@@ -180,7 +181,7 @@ abstract class Engine extends InterpreterRequires with Errors {
     }
     def extend(heap: Heap): Env = {
       // TODO: import heap from another environment
-      ???
+      Env(scope, heap)
     }
   }
 
@@ -213,12 +214,17 @@ abstract class Engine extends InterpreterRequires with Errors {
       ???
     }
   }
+
+  case class JvmValue(val v: Any) extends Value {
+    override def reify = Some(v)
+  }
+
   object Value {
     def reflect(any: Any, env: Env): Result = {
       // TODO: wrap a JVM value in an interpreter value
       // strictly speaking, env is unnecessary here, because this shouldn't be effectful
       // but I'm still threading it though here, because who knows
-      ???
+      Result(JvmValue(any), env)
     }
     def function(params: List[Tree], body: Tree, env: Env): Result = {
       // TODO: wrap a function in an intepreter value using the provided lexical environment
