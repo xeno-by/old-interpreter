@@ -1,14 +1,11 @@
 package scala.reflect.interpreter
 package internal
 
-abstract class Engine extends InterpreterRequires with Errors {
-  self: Emulators =>
-
+abstract class Engine extends InterpreterRequires with Errors with Emulators {
 
   import u._
   import definitions._
-  import scala.collection.mutable._
-
+  import scala.collection.immutable.HashMap
 
   def eval(tree: Tree): Any = {
     // can only interpret fully attributes trees
@@ -19,7 +16,7 @@ abstract class Engine extends InterpreterRequires with Errors {
       if (sub.tpe == null) UnattributedAst(sub)
       if (sub.symbol == NoSymbol) UnattributedAst(sub)
     })
-    val initialEnv = Env(Scope(List()), Heap())
+    val initialEnv = Env(Scope(HashMap[Symbol, Value]()), Heap())
     val Result(value, finalEnv) = eval(tree, initialEnv)
     value.reify.getOrElse(UnreifiableResult(value))
   }
@@ -164,7 +161,7 @@ abstract class Engine extends InterpreterRequires with Errors {
     vcond.branch(eval(then1, env1), eval(else1, env1))
   }
 
-  final case class Scope(frame: List[(Symbol, Value)]) // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
+  final case class Scope(frame: HashMap[Symbol, Value]) // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
   final case class Heap() // TODO: figure out the API for the heap
   final case class Env(scope: Scope, heap: Heap) {
     def lookup(sym: Symbol): Result = {
@@ -173,11 +170,11 @@ abstract class Engine extends InterpreterRequires with Errors {
       // TODO: evaluate nullary methods
       // all the stuff above might be effectful
       // therefore we return Result here, and not just Value
-      Result(scope.frame.find( t => t._1 == sym ).get._2, Env(scope, heap))
+      Result(scope.frame(sym), this)
     }
     def extend(sym: Symbol, value: Value): Env = {
       // TODO: extend scope with a local symbol bound to an associated value
-      Env(Scope((sym,value) +: scope.frame), heap)      
+      Env(Scope(scope.frame + (sym -> value)), heap)      
     }
     def extend(obj: Value, field: Symbol, value: Value): Env = {
       // TODO: extend heap with the new value for the given field of the given object
@@ -219,8 +216,7 @@ abstract class Engine extends InterpreterRequires with Errors {
     }
   }
 
-  case class JvmValue(val v: Any) extends Value with ExplicitEmulator{
-    // val e = Engine.this
+  case class JvmValue(v: Any) extends Value with ExplicitEmulator{
     override def reify = Some(v)
     override def select(member:  Symbol, env: Env): Result = {
       Result(selectCallable(this, member), env)

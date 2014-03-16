@@ -11,7 +11,7 @@ class BasicSuite extends FunSuite {
   }
 
   test("primitives' methods evaluation") {
-  	assert(ctfe(2+7) == 9)
+    assert(ctfe({val a = 2; val b = 7; a+b}) == 9)
   }
 
 }
