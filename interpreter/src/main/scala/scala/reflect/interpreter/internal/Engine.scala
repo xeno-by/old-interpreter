@@ -5,7 +5,6 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
 
   import u._
   import definitions._
-  import scala.collection.immutable.HashMap
 
   def eval(tree: Tree): Any = {
     // can only interpret fully attributes trees
@@ -16,7 +15,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       if (sub.tpe == null) UnattributedAst(sub)
       if (sub.symbol == NoSymbol) UnattributedAst(sub)
     })
-    val initialEnv = Env(Scope(HashMap[Symbol, Value]()), Heap())
+    val initialEnv = Env(Scope(Map[Symbol, Value]()), Heap())
     val Result(value, finalEnv) = eval(tree, initialEnv)
     value.reify.getOrElse(UnreifiableResult(value))
   }
@@ -36,14 +35,15 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     case q"throw $expr"                       => ???
     case q"$expr: $_"                         => eval(expr, env)
     // case q"(..$exprs)"                     => never going to happen, because parser desugars these trees into applications
-    case q"{ ..$stats }"                      => evalBlock(stats, env)
     case q"if ($cond) $then1 else $else1"     => evalIf(cond, then1, else1, env)
     case q"$scrut match { case ..$cases }"    => ???
     case q"try $expr catch { case ..$cases } finally $finally1" => ???
     case q"(..$params) => $body"              => Value.function(params, body, env)
     // case q"{ case ..$cases }"              => never going to happen, because typer desugars these trees into anonymous class instantiations
-    case q"while ($cond) $body"               => ???
+    case q"while ($cond) $body"               => evalWhile(cond, body, env)
     case q"do $body while ($cond)"            => ???
+    //FIXME: if and while trees match Block while not inheriting from it; bug?
+    case q"{ ..$stats }"                      => evalBlock(stats, env)
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
     // case q"new { ..$early } with ..$parents { $self => ..$stats }" => never going to happen in general case, desugared into selects/applications of New
@@ -161,7 +161,17 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     vcond.branch(eval(then1, env1), eval(else1, env1))
   }
 
-  final case class Scope(frame: HashMap[Symbol, Value]) // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
+  def evalWhile(cond: Tree, body: Tree, env: Env): Result = {
+    var res = eval(cond, env)
+    while (res.value.reify.get.asInstanceOf[Boolean]) {
+      val res1 = eval(body, res.env)
+      res = eval(cond, res1.env)
+    }
+    //while is => Unit
+    Result(NilValue(), res.env)
+  }
+
+  final case class Scope(frame: Map[Symbol, Value]) // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
   final case class Heap() // TODO: figure out the API for the heap
   final case class Env(scope: Scope, heap: Heap) {
     def lookup(sym: Symbol): Result = {
@@ -212,19 +222,28 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     }
     def branch[T](then1: => T, else1: => T): T = {
       // TODO: should be easy - check whether it's a boolean and then branch appropriately
-      ???
+      reify match {
+        case Some(true)  => then1
+        case Some(false) => else1
+        case None        => ???
+        case _           => ???
+      }
     }
   }
 
-  case class JvmValue(v: Any) extends Value with ExplicitEmulator{
+  case class JvmValue(v: Any) extends Value with ExplicitEmulator {
     override def reify = Some(v)
     override def select(member:  Symbol, env: Env): Result = {
       Result(selectCallable(this, member), env)
     }
   }
 
-  case class CallableValue() extends Value {
+  case class NilValue() extends Value {
+    override def reify = None
+  }
 
+  case class CallableValue(f: (List[Value], Env) => Result) extends Value {
+    override def apply(args: List[Value], env: Env) = f(args, env)
   }
 
   object Value {
@@ -235,7 +254,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       Result(JvmValue(any), env)
     }
     def function(params: List[Tree], body: Tree, env: Env): Result = {
-      // TODO: wrap a function in an intepreter value using the provided lexical environment
+      // TODO: wrap a function in an interpreter value using the provided lexical environment
       // note how useful it is that Env is immutable!
       ???
     }

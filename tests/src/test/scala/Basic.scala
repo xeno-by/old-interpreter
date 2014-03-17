@@ -14,4 +14,12 @@ class BasicSuite extends FunSuite {
     assert(ctfe({val a = 2; val b = 7; a+b}) == 9)
   }
 
+  test("while test") {
+    assert(ctfe({var a = 0; while (a < 10) {a += 1}; a}) == 10)
+  }
+
+  test("if test") {
+    assert(ctfe({val a = 10; val b = 5; if (a == b+5) "ok" else "notOk"}) == "ok")
+  }
+
 }

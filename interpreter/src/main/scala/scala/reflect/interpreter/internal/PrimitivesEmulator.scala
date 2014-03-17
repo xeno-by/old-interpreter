@@ -2,7 +2,7 @@ package scala.reflect.interpreter
 package internal
 
 trait Emulators {
-  self: Engine with InterpreterRequires =>
+  self: Engine =>
 
   import u._
 
@@ -18,6 +18,7 @@ trait Emulators {
 
     val INT_PLUS_INT = selectMethod[Int, Int]("$plus")
     val INT_PLUS_FLOAT = selectMethod[Int, Float]("$plus")
+    val INT_LESS_INT = selectMethod[Int, Int]("$less")
     val INT_EQEQ_INT = selectMethod[Int, Int]("$eq$eq")
 
     def selectCallable(value: Value, sym: Symbol): CallableValue = {
@@ -27,14 +28,15 @@ trait Emulators {
 
       def wrap(v: Any, e: Env) = Result(JvmValue(v), e)
 
-      val f = sym match {
-        case INT_PLUS_INT => (args: List[Value], env: Env) => wrap(binOp[Int, Int](value, args, _ + _), env)
-        case INT_PLUS_FLOAT => (args: List[Value], env: Env) => wrap(binOp[Int, Float](value, args, _ + _), env)
-        case INT_EQEQ_INT => (args: List[Value], env: Env) => wrap(binOp[Int, Int](value, args, _ == _), env)
-        case other => ???
-      }
+      val f = (args: List[Value], env: Env) => wrap(sym match {
+        case INT_PLUS_INT    => binOp[Int, Int](value, args, _ + _)
+        case INT_PLUS_FLOAT  => binOp[Int, Float](value, args, _ + _)
+        case INT_LESS_INT    => binOp[Int, Int](value, args, _ < _)
+        case INT_EQEQ_INT    => binOp[Int, Int](value, args, _ == _)
+        case other => print(sym.owner); print(sym.name.encodedName); ???
+      }, env)
 
-      new CallableValue { override def apply(args: List[Value], env: Env) = f(args, env) }
+      new CallableValue(f)
     }
 
     def selectMethod[T: TypeTag, K: TypeTag](methodName: String):Symbol = {

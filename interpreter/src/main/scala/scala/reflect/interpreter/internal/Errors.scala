@@ -18,4 +18,6 @@ trait Errors {
   def UnreifiableResult(value: Value) = sys.error(s"can't reify evaluation result $value")
 
   def RuntimeReflectionNotSupported(tree: Tree) = sys.error(s"runtime reflection is not supported: $tree")
+
+  def UnsupportedEmulation(symbol: Symbol) = sys.error(s"emulation of symbol $symbol is not supported")
 }
