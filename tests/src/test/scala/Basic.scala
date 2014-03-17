@@ -7,7 +7,7 @@ class BasicSuite extends FunSuite {
   }
 
   test("evaluates 8") {
-    assert(ctfe({var a = 9; {var a = 77}; a = 8; a}) == 8)
+    assert(ctfe({val a = 8; {val a = 1000; 0}; a}) == 8)
   }
 
   test("primitives' methods evaluation") {
@@ -15,7 +15,7 @@ class BasicSuite extends FunSuite {
   }
 
   test("while test") {
-    assert(ctfe({var a = 0; while (a < 10) {a += 1}; a}) == 10)
+    assert(ctfe({var a = 0; while (a < 10) {a += 1;88}; a}) == 10)
   }
 
   test("if test") {

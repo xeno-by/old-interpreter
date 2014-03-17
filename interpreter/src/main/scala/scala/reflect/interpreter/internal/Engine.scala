@@ -1,6 +1,9 @@
 package scala.reflect.interpreter
 package internal
 
+import scala.annotation.tailrec
+import scala.collection.mutable.HashMap
+
 abstract class Engine extends InterpreterRequires with Errors with Emulators {
 
   import u._
@@ -15,7 +18,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       if (sub.tpe == null) UnattributedAst(sub)
       if (sub.symbol == NoSymbol) UnattributedAst(sub)
     })
-    val initialEnv = Env(Scope(Map[Symbol, Value]()), Heap())
+    val initialEnv = Env(Scope(HashMap[Symbol, Value]()), Heap())
     val Result(value, finalEnv) = eval(tree, initialEnv)
     value.reify.getOrElse(UnreifiableResult(value))
   }
@@ -139,7 +142,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     // when evaluating a block, we can delegate introduction of locals to eval - it will update env and push the updates to us
     // when exiting a block, we just drop the local environment that we have accumulated without having to rollback anything
     val Results(_ :+ vstats, env1) = eval(stats, env)
-    Result(vstats, env.extend(env1.heap))
+    Result(vstats,env1)
   }
 
   def evalSelect(qual: Tree, sym: Symbol, env: Env): Result = {
@@ -148,7 +151,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
   }
 
   def evalApply(expr: Tree, args: List[Tree], env: Env): Result = {
-    // named and default args are already desugared by scalac, so we just perform straightforward evaluation
+    // namevar b = 99; while(a<9) {a = a+1; val b = 9}; bd and default args are already desugared by scalac, so we just perform straightforward evaluation
     // TODO: this will not be the case for palladium, but we'll see to that later
     // TODO: need to handle varargs (represented by q"arg: _*")
     val Result(vexpr, env1) = eval(expr, env)
@@ -161,17 +164,17 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     vcond.branch(eval(then1, env1), eval(else1, env1))
   }
 
-  def evalWhile(cond: Tree, body: Tree, env: Env): Result = {
-    var res = eval(cond, env)
-    while (res.value.reify.get.asInstanceOf[Boolean]) {
-      val res1 = eval(body, res.env)
-      res = eval(cond, res1.env)
-    }
-    //while is => Unit
-    Result(NilValue(), res.env)
+  @tailrec
+  private def evalWhile(cond: Tree, body: Tree, env: Env): Result = {
+    val Result(vcond, _) = eval(cond, env)
+    if(vcond.reify.get.asInstanceOf[Boolean]) {
+      val Result(_, env1) = eval(body, env)
+      evalWhile(cond, body, env1)
+    } else
+      Result(NilValue(), env)
   }
 
-  final case class Scope(frame: Map[Symbol, Value]) // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
+  final case class Scope(frame: HashMap[Symbol, Value]) // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
   final case class Heap() // TODO: figure out the API for the heap
   final case class Env(scope: Scope, heap: Heap) {
     def lookup(sym: Symbol): Result = {
@@ -184,7 +187,11 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     }
     def extend(sym: Symbol, value: Value): Env = {
       // TODO: extend scope with a local symbol bound to an associated value
-      Env(Scope(scope.frame + (sym -> value)), heap)      
+      scope.frame.get(sym) match {
+        case Some(_) => scope.frame += (sym -> value); this
+        case None => Env(Scope(scope.frame ++ HashMap(sym -> value)), heap)
+      }
+
     }
     def extend(obj: Value, field: Symbol, value: Value): Env = {
       // TODO: extend heap with the new value for the given field of the given object
