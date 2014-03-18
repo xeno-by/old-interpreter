@@ -1,7 +1,7 @@
 package scala.reflect.interpreter
 package internal
 
-abstract class Engine extends InterpreterRequires with Errors {
+abstract class Engine extends InterpreterRequires with Definitions with Errors {
   import u._
   import definitions._
   import internal.decorators._
