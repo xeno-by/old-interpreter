@@ -29,6 +29,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors {
     case q"$qual.$_"                          => evalSelect(qual, tree.symbol, env)
     case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
     case q"$_.this"                           => env.lookup(tree.symbol)
+    case q"$expr.isInstanceOf[$tpt]()"        => evalTypeTest(expr, tpt.tpe, env)
+    case q"$expr.asInstanceOf[$tpt]()"        => evalTypeCast(expr, tpt.tpe, env)
     case Apply(expr, args)                    => evalApply(expr, args, env) // the q"$expr[..$targs](...$argss)" quasiquote is too high-level for this
     case TypeApply(expr, targs)               => eval(expr, env)
     case q"$lhs = $rhs"                       => evalAssign(lhs, rhs, env)
@@ -147,6 +149,16 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors {
     vqual.select(sym, env1)
   }
 
+  def evalTypeTest(expr: Tree, tpe: Type, env: Env): Result = {
+    val Result(vexpr, env1) = eval(expr, env)
+    vexpr.typeTest(tpe, env1)
+  }
+
+  def evalTypeCast(expr: Tree, tpe: Type, env: Env): Result = {
+    val Result(vexpr, env1) = eval(expr, env)
+    vexpr.typeCast(tpe, env1)
+  }
+
   def evalApply(expr: Tree, args: List[Tree], env: Env): Result = {
     // named and default args are already desugared by scalac, so we just perform straightforward evaluation
     // TODO: this will not be the case for palladium, but we'll see to that later
@@ -212,6 +224,15 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors {
     }
     def branch[T](then1: => T, else1: => T): T = {
       // TODO: should be easy - check whether it's a boolean and then branch appropriately
+      ???
+    }
+    def typeTest(tpe: Type, env: Env): Result = {
+      // TODO: can't use a symbol here, because this can be an array. use tpe.erasure if in doubt
+      ???
+    }
+    def typeCast(tpe: Type, env: Env): Result = {
+      // TODO: can't be a no-op, because we actually need to throw if the type is incompatible
+      // TODO: also, we have to deal with all sort of conversions built into Scala: boxings, numeric stuff, nulls, etc
       ???
     }
   }
