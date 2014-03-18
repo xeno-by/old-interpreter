@@ -24,7 +24,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors {
     case q"${value: Value}"                   => Result(value, env)
     case EmptyTree                            => eval(q"()", env) // when used in blocks, means "skip that tree", so we evaluate to whatever
     case Literal(_)                           => evalLiteral(tree, env)
-    case New(_)                               => Value.instantiate(tree.symbol.asClass, env)
+    case New(_)                               => Value.instantiate(tree.tpe, env)
     case Ident(_)                             => env.lookup(tree.symbol) // q"$_" would've matched any tree, not just an ident
     case q"$qual.$_"                          => evalSelect(qual, tree.symbol, env)
     case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
@@ -227,8 +227,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors {
       // note how useful it is that Env is immutable!
       ???
     }
-    def instantiate(cls: ClassSymbol, env: Env): Result = {
-      // TODO: instantiate a class (not a type like List[Int], but a class like List, because we need to model erasure)
+    def instantiate(tpe: Type, env: Env): Result = {
+      // TODO: instantiate a type (can't use ClassSymbol instead of Type, because we need to support polymorphic arrays)
       // not sure whether we need env, because we don't actually call the constructor here, but let's have it just in case
       ???
     }
