@@ -4,6 +4,7 @@ package internal
 abstract class Engine extends InterpreterRequires with Errors {
   import u._
   import definitions._
+  import internal.decorators._
 
   def eval(tree: Tree): Any = {
     // can only interpret fully attributes trees
@@ -20,6 +21,7 @@ abstract class Engine extends InterpreterRequires with Errors {
   }
 
   def eval(tree: Tree, env: Env): Result = tree match {
+    case q"${value: Value}"                   => Result(value, env)
     case EmptyTree                            => eval(q"()", env) // when used in blocks, means "skip that tree", so we evaluate to whatever
     case Literal(_)                           => evalLiteral(tree, env)
     case New(_)                               => Value.instantiate(tree.symbol.asClass, env)
@@ -238,6 +240,9 @@ abstract class Engine extends InterpreterRequires with Errors {
       // TODO: create an interpreter value that corresponds to the method represented by the symbol
       ???
     }
+    // allows creating trees from interpreter values and then extracting those values from those trees
+    implicit def liftableValue: Liftable[Value] = Liftable { v => Ident(termNames.WILDCARD).updateAttachment(v) }
+    implicit def unliftableValue: Unliftable[Value] = Unliftable { case t if t.attachments.contains[Value] => t.attachments.get[Value].get }
   }
 
   final case class Result(value: Value, env: Env)
