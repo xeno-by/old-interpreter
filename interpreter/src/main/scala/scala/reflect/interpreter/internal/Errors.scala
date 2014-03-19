@@ -19,5 +19,5 @@ trait Errors {
 
   def RuntimeReflectionNotSupported(tree: Tree) = sys.error(s"runtime reflection is not supported: $tree")
 
-  def UnsupportedEmulation(symbol: Symbol) = sys.error(s"emulation of symbol $symbol is not supported")
+  def UnsupportedEmulation(symbol: Symbol) = sys.error(s"emulation of symbol $symbol of ${symbol.owner} is not supported")
 }

@@ -33,7 +33,7 @@ trait Emulators {
         case INT_PLUS_FLOAT  => binOp[Int, Float](value, args, _ + _)
         case INT_LESS_INT    => binOp[Int, Int](value, args, _ < _)
         case INT_EQEQ_INT    => binOp[Int, Int](value, args, _ == _)
-        case other => print(sym.owner); print(sym.name.encodedName); ???
+        case other => UnsupportedEmulation(sym)
       }, env)
 
       new CallableValue(f)
