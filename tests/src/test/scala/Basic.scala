@@ -10,6 +10,14 @@ class BasicSuite extends FunSuite {
     assert(ctfe({val a = 8; {val a = 1000; 0}; a}) == 8)
   }
 
+  test("mutable values") {
+    assert(ctfe({var a = 8; {a = 1000+a; 0}; a}) == 1008)
+  }
+
+  test("immutable value scopes") {
+    assert(ctfe({val a = 1; {val a = 2; {val a = 3; 0}}; a}) == 1)
+  }
+
   test("primitives' methods evaluation") {
     assert(ctfe({val a = 2; val b = 7; a+b}) == 9)
   }

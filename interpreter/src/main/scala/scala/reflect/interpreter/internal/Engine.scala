@@ -2,7 +2,7 @@ package scala.reflect.interpreter
 package internal
 
 import scala.annotation.tailrec
-import scala.collection.mutable.HashMap
+import scala.collection.mutable
 
 abstract class Engine extends InterpreterRequires with Errors with Emulators {
 
@@ -18,9 +18,9 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       if (sub.tpe == null) UnattributedAst(sub)
       if (sub.symbol == NoSymbol) UnattributedAst(sub)
     })
-    val initialEnv = Env(Scope(HashMap[Symbol, Value]()), Heap())
+    val initialEnv = Env(List(Map()), mutable.HashMap())
     val Result(value, finalEnv) = eval(tree, initialEnv)
-    value.reify.getOrElse(UnreifiableResult(value))
+    value.reify(finalEnv).getOrElse(UnreifiableResult(value))
   }
 
   def eval(tree: Tree, env: Env): Result = tree match {
@@ -142,6 +142,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     // when evaluating a block, we can delegate introduction of locals to eval - it will update env and push the updates to us
     // when exiting a block, we just drop the local environment that we have accumulated without having to rollback anything
     val Results(_ :+ vstats, env1) = eval(stats, env)
+    env1.gc(vstats)
     Result(vstats,env1)
   }
 
@@ -151,9 +152,10 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
   }
 
   def evalApply(expr: Tree, args: List[Tree], env: Env): Result = {
-    // namevar b = 99; while(a<9) {a = a+1; val b = 9}; bd and default args are already desugared by scalac, so we just perform straightforward evaluation
+    // named and default args are already desugared by scalac, so we just perform straightforward evaluation
     // TODO: this will not be the case for palladium, but we'll see to that later
     // TODO: need to handle varargs (represented by q"arg: _*")
+    // TODO: push stack frame
     val Result(vexpr, env1) = eval(expr, env)
     val Results(vargs, env2) = eval(args, env1)
     vexpr.apply(vargs, env2)
@@ -161,35 +163,46 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
 
   def evalIf(cond: Tree, then1: Tree, else1: Tree, env: Env): Result = {
     val Result(vcond, env1) = eval(cond, env)
-    vcond.branch(eval(then1, env1), eval(else1, env1))
+    vcond.branch(eval(then1, env1), eval(else1, env1), env1)
   }
 
   @tailrec
   private def evalWhile(cond: Tree, body: Tree, env: Env): Result = {
     val Result(vcond, _) = eval(cond, env)
-    if(vcond.reify.get.asInstanceOf[Boolean]) {
+    if(vcond.reify(env).get.asInstanceOf[Boolean]) {
       val Result(_, env1) = eval(body, env)
       evalWhile(cond, body, env1)
     } else
-      Result(NilValue(), env)
+      Value.reflect((), env)
   }
 
-  final case class Scope(frame: HashMap[Symbol, Value]) // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
-  final case class Heap() // TODO: figure out the API for the heap
-  final case class Env(scope: Scope, heap: Heap) {
+  sealed trait Slot
+  final case class Primitive(value: Any) extends Slot
+  final case class Object(fields: Map[Symbol, Value]) extends Slot
+  // heap is a global mutable object
+  type Heap = mutable.HashMap[Value, Slot]
+
+  type FrameStack = List[Map[Symbol, Value]]
+
+  final case class Env(stack: FrameStack, heap: Heap) {
     def lookup(sym: Symbol): Result = {
       // TODO: handle lazy val init
       // TODO: handle module init
       // TODO: evaluate nullary methods
       // all the stuff above might be effectful
       // therefore we return Result here, and not just Value
-      Result(scope.frame(sym), this)
+      Result(stack.head(sym), this)
     }
     def extend(sym: Symbol, value: Value): Env = {
       // TODO: extend scope with a local symbol bound to an associated value
-      scope.frame.get(sym) match {
-        case Some(_) => scope.frame += (sym -> value); this
-        case None => Env(Scope(scope.frame ++ HashMap(sym -> value)), heap)
+      stack.head.get(sym) match {
+        case Some(v) =>
+          // update
+          heap(v) = Primitive(value.reify(this).get)
+          Env(stack.head + (sym -> value) :: stack.tail, heap)
+        case None =>
+          // introduce
+          Env(stack.head + (sym -> value) :: stack.tail, heap)
       }
 
     }
@@ -199,17 +212,35 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     }
     def extend(heap: Heap): Env = {
       // TODO: import heap from another environment
-      Env(scope, heap)
+      this.heap ++= heap
+      Env(stack, this.heap)
+    }
+    def extend(v: Value, a: Any): Env = {
+      // operation with side effects since heap is mutable object
+      // extends heap with reflected value
+      heap(v) = Primitive(a)
+      Env(stack, heap)
+    }
+    def gc(expr: Value) = {
+      // clean up heap: remove intermediate evaluation results, out-of-scope locals
+      // expr stands for 'expr' in block, we don't want return value to be deleted
+      // TODO: this is slow as hell and even more inefficient than one could imagine
+      val diff = heap.keySet -- stack.flatten.map(x => x._2) - expr
+      heap --= diff
     }
   }
 
   sealed trait Value {
-    def reify: Option[Any] = {
+    def reify(env: Env): Option[Any] = {
       // TODO: convert this interpreter value to a JVM value
       // return None if it refers to a not-yet-compiled class
       // note that it is probably possible to improve reify to work correctly in all cases
       // however this doesn't matter much for Project Palladium, so that's really low priority
-      ???
+      env.heap.get(this) match {
+        case Some(Primitive(v)) => Some(v)
+        case Some(_:Object)     => ??? // FIXME: what would the result of reifying an object be?
+        case None               => None
+      }
     }
     def select(member: Symbol, env: Env): Result = {
       // note that we need env here, because selection might be effectful
@@ -227,9 +258,9 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       // TODO: in the current model, constructors have to return the object being constructed
       ???
     }
-    def branch[T](then1: => T, else1: => T): T = {
+    def branch[T](then1: => T, else1: => T, env: Env): T = {
       // TODO: should be easy - check whether it's a boolean and then branch appropriately
-      reify match {
+      reify(env) match {
         case Some(true)  => then1
         case Some(false) => else1
         case None        => ???
@@ -238,15 +269,10 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     }
   }
 
-  case class JvmValue(v: Any) extends Value with ExplicitEmulator {
-    override def reify = Some(v)
+  class JvmValue() extends Value with ExplicitEmulator {
     override def select(member:  Symbol, env: Env): Result = {
-      Result(selectCallable(this, member), env)
+      Result(selectCallable(this, member, env), env)
     }
-  }
-
-  case class NilValue() extends Value {
-    override def reify = None
   }
 
   case class CallableValue(f: (List[Value], Env) => Result) extends Value {
@@ -258,7 +284,8 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       // TODO: wrap a JVM value in an interpreter value
       // strictly speaking, env is unnecessary here, because this shouldn't be effectful
       // but I'm still threading it though here, because who knows
-      Result(JvmValue(any), env)
+      val value = new JvmValue()
+      Result(value, env.extend(value, any))
     }
     def function(params: List[Tree], body: Tree, env: Env): Result = {
       // TODO: wrap a function in an interpreter value using the provided lexical environment

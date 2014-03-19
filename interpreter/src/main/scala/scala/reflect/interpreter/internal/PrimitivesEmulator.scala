@@ -7,11 +7,11 @@ trait Emulators {
   import u._
 
   trait PrimitivesEmulator {
-    def selectCallable(value: Value, sym: Symbol): CallableValue
+    def selectCallable(value: Value, sym: Symbol, env: Env): CallableValue
   }
 
   trait ReflectionEmulator extends PrimitivesEmulator {
-    def selectCallable(value: Value, sym: Symbol): CallableValue = ???
+    def selectCallable(value: Value, sym: Symbol, env: Env): CallableValue = ???
   }
 
   trait ExplicitEmulator extends PrimitivesEmulator {
@@ -21,12 +21,12 @@ trait Emulators {
     val INT_LESS_INT = selectMethod[Int, Int]("$less")
     val INT_EQEQ_INT = selectMethod[Int, Int]("$eq$eq")
 
-    def selectCallable(value: Value, sym: Symbol): CallableValue = {
+    def selectCallable(value: Value, sym: Symbol, env: Env): CallableValue = {
       def binOp[T, K](receiver: Value, args: List[Value], f: (T, K) => Any): Any = {
-        f(receiver.reify.get.asInstanceOf[T], args.head.reify.get.asInstanceOf[K])
+        f(receiver.reify(env).get.asInstanceOf[T], args.head.reify(env).get.asInstanceOf[K])
       }
 
-      def wrap(v: Any, e: Env) = Result(JvmValue(v), e)
+      def wrap(v: Any, e: Env) = Value.reflect(v, e)
 
       val f = (args: List[Value], env: Env) => wrap(sym match {
         case INT_PLUS_INT    => binOp[Int, Int](value, args, _ + _)
