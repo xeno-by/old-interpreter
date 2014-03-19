@@ -260,9 +260,10 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors {
     loop(vscrut, cases, env1)
   }
 
-  final case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
-  final case class Heap() // TODO: figure out the API for the heap
-  final case class Env(scope: Scope, heap: Heap) {
+  // can't make these classes final because of SI-4440
+  case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
+  case class Heap() // TODO: figure out the API for the heap
+  case class Env(scope: Scope, heap: Heap) {
     def lookup(sym: Symbol): Result = {
       // TODO: handle lazy val init
       // TODO: handle module init
