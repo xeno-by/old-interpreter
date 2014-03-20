@@ -1,9 +1,10 @@
 package scala.reflect.interpreter
 package internal
 
-abstract class Engine extends InterpreterRequires with Errors {
+abstract class Engine extends InterpreterRequires with Definitions with Errors {
   import u._
   import definitions._
+  import internal.decorators._
 
   def eval(tree: Tree): Any = {
     // can only interpret fully attributes trees
@@ -15,18 +16,21 @@ abstract class Engine extends InterpreterRequires with Errors {
       if (sub.symbol == NoSymbol) UnattributedAst(sub)
     })
     val initialEnv = Env(Scope(), Heap())
-    val Result(value, finalEnv) = eval(tree, initialEnv)
+    val (value, finalEnv) = eval(tree, initialEnv)
     value.reify.getOrElse(UnreifiableResult(value))
   }
 
   def eval(tree: Tree, env: Env): Result = tree match {
+    case q"${value: Value}"                   => (value, env)
     case EmptyTree                            => eval(q"()", env) // when used in blocks, means "skip that tree", so we evaluate to whatever
     case Literal(_)                           => evalLiteral(tree, env)
-    case New(_)                               => Value.instantiate(tree.symbol.asClass, env)
+    case New(_)                               => Value.instantiate(tree.tpe, env)
     case Ident(_)                             => env.lookup(tree.symbol) // q"$_" would've matched any tree, not just an ident
     case q"$qual.$_"                          => evalSelect(qual, tree.symbol, env)
     case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
     case q"$_.this"                           => env.lookup(tree.symbol)
+    case q"$expr.isInstanceOf[$tpt]()"        => evalTypeTest(expr, tpt.tpe, env)
+    case q"$expr.asInstanceOf[$tpt]()"        => evalTypeCast(expr, tpt.tpe, env)
     case Apply(expr, args)                    => evalApply(expr, args, env) // the q"$expr[..$targs](...$argss)" quasiquote is too high-level for this
     case TypeApply(expr, targs)               => eval(expr, env)
     case q"$lhs = $rhs"                       => evalAssign(lhs, rhs, env)
@@ -36,7 +40,7 @@ abstract class Engine extends InterpreterRequires with Errors {
     // case q"(..$exprs)"                     => never going to happen, because parser desugars these trees into applications
     case q"{ ..$stats }"                      => evalBlock(stats, env)
     case q"if ($cond) $then1 else $else1"     => evalIf(cond, then1, else1, env)
-    case q"$scrut match { case ..$cases }"    => ???
+    case q"$scrut match { case ..$cases }"    => evalMatch(scrut, cases, env)
     case q"try $expr catch { case ..$cases } finally $finally1" => ???
     case q"(..$params) => $body"              => Value.function(params, body, env)
     // case q"{ case ..$cases }"              => never going to happen, because typer desugars these trees into anonymous class instantiations
@@ -54,11 +58,11 @@ abstract class Engine extends InterpreterRequires with Errors {
   def eval(args: List[Tree], env: Env): Results = {
     args match {
       case arg :: tail =>
-        val Result(varg, env1) = eval(arg, env)
-        val Results(vtail, env2) = eval(tail, env1)
-        Results(varg :: vtail, env2)
+        val (varg, env1) = eval(arg, env)
+        val (vtail, env2) = eval(tail, env1)
+        (varg :: vtail, env2)
       case Nil =>
-        Results(Nil, env)
+        (Nil, env)
     }
   }
 
@@ -103,11 +107,11 @@ abstract class Engine extends InterpreterRequires with Errors {
       }
       Value.reflect(jvmValue, env)
     }
-    val Result(vrepr, env1) = tree match {
+    val (vrepr, env1) = tree match {
       case ValDef(_, _, tpt, rhs) =>
         // note how we bind ValDef's name to the default value of the corresponding type when evaluating the rhs
         // this is how Scala does it, so don't say that this looks weird :)
-        val Result(vdefault, envx) = defaultValue(tpt.tpe)
+        val (vdefault, envx) = defaultValue(tpt.tpe)
         eval(rhs, envx.extend(tree.symbol, vdefault))
       case tree: ModuleDef =>
         Value.module(tree.symbol.asModule, env)
@@ -123,11 +127,11 @@ abstract class Engine extends InterpreterRequires with Errors {
     // these end up being processed in evalApply
     lhs match {
       case Ident(_) => // local value (things like `x` as in `this.x` have already been desugared by typer)
-        val Result(vrhs, env1) = eval(rhs, env)
+        val (vrhs, env1) = eval(rhs, env)
         Value.reflect((), env1.extend(lhs.symbol, vrhs))
       case Select(qual, _) => // someone's field
-        val Result(vlhs, env1) = eval(lhs, env)
-        val Result(vrhs, env2) = eval(rhs, env1)
+        val (vlhs, env1) = eval(lhs, env)
+        val (vrhs, env2) = eval(rhs, env1)
         Value.reflect((), env1.extend(vlhs, lhs.symbol, vrhs))
     }
   }
@@ -136,32 +140,130 @@ abstract class Engine extends InterpreterRequires with Errors {
     // note how thanks to immutability of envs we don't have problems with local variable scoping
     // when evaluating a block, we can delegate introduction of locals to eval - it will update env and push the updates to us
     // when exiting a block, we just drop the local environment that we have accumulated without having to rollback anything
-    val Results(_ :+ vstats, env1) = eval(stats, env)
-    Result(vstats, env.extend(env1.heap))
+    val (_ :+ vstats, env1) = eval(stats, env)
+    (vstats, env.extend(env1.heap))
   }
 
   def evalSelect(qual: Tree, sym: Symbol, env: Env): Result = {
-    val Result(vqual, env1) = eval(qual, env)
+    val (vqual, env1) = eval(qual, env)
     vqual.select(sym, env1)
+  }
+
+  def evalTypeTest(expr: Tree, tpe: Type, env: Env): Result = {
+    val (vexpr, env1) = eval(expr, env)
+    vexpr.typeTest(tpe, env1)
+  }
+
+  def evalTypeCast(expr: Tree, tpe: Type, env: Env): Result = {
+    val (vexpr, env1) = eval(expr, env)
+    vexpr.typeCast(tpe, env1)
   }
 
   def evalApply(expr: Tree, args: List[Tree], env: Env): Result = {
     // named and default args are already desugared by scalac, so we just perform straightforward evaluation
     // TODO: this will not be the case for palladium, but we'll see to that later
     // TODO: need to handle varargs (represented by q"arg: _*")
-    val Result(vexpr, env1) = eval(expr, env)
-    val Results(vargs, env2) = eval(args, env1)
+    val (vexpr, env1) = eval(expr, env)
+    val (vargs, env2) = eval(args, env1)
     vexpr.apply(vargs, env2)
   }
 
   def evalIf(cond: Tree, then1: Tree, else1: Tree, env: Env): Result = {
-    val Result(vcond, env1) = eval(cond, env)
+    val (vcond, env1) = eval(cond, env)
     vcond.branch(eval(then1, env1), eval(else1, env1))
   }
 
-  final case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
-  final case class Heap() // TODO: figure out the API for the heap
-  final case class Env(scope: Scope, heap: Heap) {
+  def evalMatch(scrut: Tree, cases: List[CaseDef], env: Env): Result = {
+    // TODO: semantics of evalPattern is just a sketch
+    // it should be validated against the spec and the code that's emitted by the pattern matcher
+    // TODO: also support name-based pattern matching
+    // https://github.com/scala/scala/pull/2848
+    def succeed(menv: Env, renv: Env) = eval(q"true", renv)
+    def fail(menv: Env, renv: Env) = eval(q"false", renv)
+    def evalPattern(vscrut: Value, pat: Tree, menv: Env, renv: Env): Result = {
+      def checkCond(cond: Tree, onSuccess: (Env, Env) => Result = succeed, onFailure: (Env, Env) => Result = fail) = {
+        val (vcond, menv1) = eval(cond, menv)
+        val renv1 = renv.extend(menv1.heap)
+        vcond.branch(onSuccess(menv1, renv1), onFailure(menv1, renv1))
+      }
+      def checkPat(pat: Tree, onSuccess: (Env, Env) => Result = succeed, onFailure: (Env, Env) => Result = fail) = {
+        val (vpat, renv1) = evalPattern(vscrut, pat, menv, renv)
+        val menv1 = menv.extend(renv1.heap)
+        vpat.branch(onSuccess(menv1, renv1), onFailure(menv1, renv1))
+      }
+      def checkEval(expr: Tree, cond: Value => Tree, result: Value => Tree, onSuccess: (Value, Env, Env) => Result) = {
+        val (vexpr, menv1) = eval(expr, menv)
+        val (vcond, menv2) = eval(cond(vexpr), menv1)
+        def cont = {
+          val (vresult, menv3) = eval(result(vexpr), menv2)
+          onSuccess(vresult, menv3, renv.extend(menv3.heap))
+        }
+        vcond.branch(cont, fail(menv2, renv.extend(menv2.heap)))
+      }
+      pat match {
+        case Ident(termNames.WILDCARD) =>
+          succeed(menv, renv)
+        case Typed(_, tpt) =>
+          checkCond(q"$vscrut.${Any_isInstanceOf}[$tpt]()")
+        case Bind(name, pat) =>
+          checkPat(pat, onSuccess = (menv1, renv1) => succeed(menv1, renv1.extend(pat.symbol, vscrut)))
+        case pat: Literal =>
+          checkCond(q"$vscrut.${Any_equals}($pat)")
+        case pat: RefTree =>
+          checkCond(q"$vscrut.${Object_eq}($pat)")
+        case Alternative(alt1 :: alt2 :: rest) =>
+          val fallback = if (rest.isEmpty) alt2 else Alternative(alt2 :: rest)
+          checkPat(alt1, onFailure = (menv1, renv1) => evalPattern(vscrut, fallback, menv1, renv1))
+        case Apply(tpt, pats) => // can only happen when tpt is a case class
+          def cont(menv1: Env, renv1: Env) = {
+            val fields = tpt.tpe.decls.sorted.filter(sym => sym.isMethod && sym.asMethod.isCaseAccessor)
+            val (vfields, matchEnv2) = eval(fields.map(f => q"$scrut.$f"), menv1)
+            val renv1 = renv.extend(matchEnv2.heap)
+            evalPatterns(vfields, pats, matchEnv2, renv1)
+          }
+          checkCond(q"$vscrut.${Any_isInstanceOf}[$tpt]()", onSuccess = cont)
+        case UnApply(Apply(unapply, List(dummy)), Nil) => // this is what other extractors are translated to
+          checkCond(q"$unapply($vscrut)")
+        case UnApply(Apply(unapply, List(dummy)), pats) =>
+          def cont(result: Value, menv1: Env, renv1: Env) = {
+            val fields = TupleClass(pats.length).info.decls.sorted.filter(sym => sym.isMethod && sym.asMethod.isCaseAccessor)
+            val (vfields, menv2) = {
+              if (pats.length == 1) (result :: Nil, menv1)
+              else eval(fields.map(f => q"$scrut.$f"), menv1)
+            }
+            evalPatterns(vfields, pats, menv2, renv1.extend(menv2.heap))
+          }
+          checkEval(q"$unapply($vscrut)", vexpr => q"$vexpr.${Option_isDefined}", vexpr => q"$vexpr.${Option_get}", onSuccess = cont)
+      }
+    }
+    def evalPatterns(vscruts: List[Value], pats: List[Tree], menv: Env, renv: Env): Result = (vscruts, pats) match {
+      case (vscruts, Star(pat) :: Nil) =>
+        // TODO: create a vararg array from values represented by vscruts and bind it to pat
+        ???
+      case (vscrut :: vrest, pat :: patrest) =>
+        val (result, renv1) = evalPattern(vscrut, pat, menv, renv)
+        result.branch(evalPatterns(vrest, patrest, menv.extend(renv1.heap), renv1), fail(menv, renv1))
+      case (Nil, Nil) =>
+        succeed(menv, renv)
+    }
+    def loop(vscrut: Value, cases: List[CaseDef], env: Env): Result = cases match {
+      case CaseDef(pat, guard, body) :: rest =>
+        val (vpat, env1) = evalPattern(vscrut, pat, env, env)
+        val (vguard, env2) = eval(guard.orElse(q"true"), env1)
+        vguard.branch(eval(body, env2), loop(vscrut, rest, env2))
+      case _ =>
+        val (exn, env1) = Value.instantiate(typeOf[MatchError], env)
+        val (exn1, env2) = exn.apply(List(vscrut), env1)
+        ??? // TODO: throw exn1 in env2
+    }
+    val (vscrut, env1) = eval(scrut, env)
+    loop(vscrut, cases, env1)
+  }
+
+  // can't make these classes final because of SI-4440
+  case class Scope() // TODO: figure out how to combine both lexical scope (locals and globals) and stack frames
+  case class Heap() // TODO: figure out the API for the heap
+  case class Env(scope: Scope, heap: Heap) {
     def lookup(sym: Symbol): Result = {
       // TODO: handle lazy val init
       // TODO: handle module init
@@ -212,6 +314,15 @@ abstract class Engine extends InterpreterRequires with Errors {
       // TODO: should be easy - check whether it's a boolean and then branch appropriately
       ???
     }
+    def typeTest(tpe: Type, env: Env): Result = {
+      // TODO: can't use a symbol here, because this can be an array. use tpe.erasure if in doubt
+      ???
+    }
+    def typeCast(tpe: Type, env: Env): Result = {
+      // TODO: can't be a no-op, because we actually need to throw if the type is incompatible
+      // TODO: also, we have to deal with all sort of conversions built into Scala: boxings, numeric stuff, nulls, etc
+      ???
+    }
   }
   object Value {
     def reflect(any: Any, env: Env): Result = {
@@ -225,8 +336,8 @@ abstract class Engine extends InterpreterRequires with Errors {
       // note how useful it is that Env is immutable!
       ???
     }
-    def instantiate(cls: ClassSymbol, env: Env): Result = {
-      // TODO: instantiate a class (not a type like List[Int], but a class like List, because we need to model erasure)
+    def instantiate(tpe: Type, env: Env): Result = {
+      // TODO: instantiate a type (can't use ClassSymbol instead of Type, because we need to support polymorphic arrays)
       // not sure whether we need env, because we don't actually call the constructor here, but let's have it just in case
       ???
     }
@@ -238,8 +349,11 @@ abstract class Engine extends InterpreterRequires with Errors {
       // TODO: create an interpreter value that corresponds to the method represented by the symbol
       ???
     }
+    // allows creating trees from interpreter values and then extracting those values from those trees
+    implicit def liftableValue: Liftable[Value] = Liftable { v => Ident(termNames.WILDCARD).updateAttachment(v) }
+    implicit def unliftableValue: Unliftable[Value] = Unliftable { case t if t.attachments.contains[Value] => t.attachments.get[Value].get }
   }
 
-  final case class Result(value: Value, env: Env)
-  final case class Results(value: List[Value], env: Env)
+  type Result = (Value, Env)
+  type Results = (List[Value], Env)
 }
