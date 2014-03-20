@@ -2,7 +2,6 @@ package scala.reflect.interpreter
 package internal
 
 import scala.annotation.tailrec
-import scala.collection.mutable
 
 abstract class Engine extends InterpreterRequires with Errors with Emulators {
 
@@ -18,7 +17,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       if (sub.tpe == null) UnattributedAst(sub)
       if (sub.symbol == NoSymbol) UnattributedAst(sub)
     })
-    val initialEnv = Env(List(Map()), mutable.HashMap())
+    val initialEnv = Env(List(Map()), Map())
     val Result(value, finalEnv) = eval(tree, initialEnv)
     value.reify(finalEnv).getOrElse(UnreifiableResult(value))
   }
@@ -142,8 +141,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     // when evaluating a block, we can delegate introduction of locals to eval - it will update env and push the updates to us
     // when exiting a block, we just drop the local environment that we have accumulated without having to rollback anything
     val Results(_ :+ vstats, env1) = eval(stats, env)
-    env1.gc(vstats)
-    Result(vstats,env1)
+    Result(vstats, env1.gc(vstats))
   }
 
   def evalSelect(qual: Tree, sym: Symbol, env: Env): Result = {
@@ -168,19 +166,17 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
 
   @tailrec
   private def evalWhile(cond: Tree, body: Tree, env: Env): Result = {
-    val Result(vcond, _) = eval(cond, env)
-    if(vcond.reify(env).get.asInstanceOf[Boolean]) {
-      val Result(_, env1) = eval(body, env)
+    val Result(vcond, condenv) = eval(cond, env)
+    if(vcond.reify(condenv).get.asInstanceOf[Boolean]) {
+      val Result(_, env1) = eval(body, condenv)
       evalWhile(cond, body, env1)
-    } else
-      Value.reflect((), env)
+    } else Value.reflect((), condenv)
   }
 
   sealed trait Slot
   final case class Primitive(value: Any) extends Slot
   final case class Object(fields: Map[Symbol, Value]) extends Slot
-  // heap is a global mutable object
-  type Heap = mutable.HashMap[Value, Slot]
+  type Heap = Map[Value, Slot]
 
   type FrameStack = List[Map[Symbol, Value]]
 
@@ -198,8 +194,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       stack.head.get(sym) match {
         case Some(v) =>
           // update
-          heap(v) = Primitive(value.reify(this).get)
-          Env(stack.head + (sym -> value) :: stack.tail, heap)
+          Env(stack.head + (sym -> value) :: stack.tail, heap + (v -> Primitive(value.reify(this).get)))
         case None =>
           // introduce
           Env(stack.head + (sym -> value) :: stack.tail, heap)
@@ -212,21 +207,19 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     }
     def extend(heap: Heap): Env = {
       // TODO: import heap from another environment
-      this.heap ++= heap
-      Env(stack, this.heap)
+      Env(stack, this.heap ++ heap)
     }
     def extend(v: Value, a: Any): Env = {
       // operation with side effects since heap is mutable object
       // extends heap with reflected value
-      heap(v) = Primitive(a)
-      Env(stack, heap)
+      Env(stack, heap + (v -> Primitive(a)))
     }
-    def gc(expr: Value) = {
+    def gc(expr: Value): Env = {
       // clean up heap: remove intermediate evaluation results, out-of-scope locals
       // expr stands for 'expr' in block, we don't want return value to be deleted
       // TODO: this is slow as hell and even more inefficient than one could imagine
       val diff = heap.keySet -- stack.flatten.map(x => x._2) - expr
-      heap --= diff
+      Env(stack, heap -- diff)
     }
   }
 

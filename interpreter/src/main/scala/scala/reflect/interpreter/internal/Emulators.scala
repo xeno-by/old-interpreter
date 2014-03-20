@@ -22,19 +22,19 @@ trait Emulators {
     val INT_EQEQ_INT = selectMethod[Int, Int]("$eq$eq")
 
     def selectCallable(value: Value, sym: Symbol, env: Env): CallableValue = {
-      def binOp[T, K](receiver: Value, args: List[Value], f: (T, K) => Any): Any = {
-        f(receiver.reify(env).get.asInstanceOf[T], args.head.reify(env).get.asInstanceOf[K])
+      def binOp[T, K](receiver: Value, args: List[Value], e: Env, f: (T, K) => Any): Any = {
+        f(receiver.reify(e).get.asInstanceOf[T], args.head.reify(e).get.asInstanceOf[K])
       }
 
       def wrap(v: Any, e: Env) = Value.reflect(v, e)
 
-      val f = (args: List[Value], env: Env) => wrap(sym match {
-        case INT_PLUS_INT    => binOp[Int, Int](value, args, _ + _)
-        case INT_PLUS_FLOAT  => binOp[Int, Float](value, args, _ + _)
-        case INT_LESS_INT    => binOp[Int, Int](value, args, _ < _)
-        case INT_EQEQ_INT    => binOp[Int, Int](value, args, _ == _)
+      val f = (args: List[Value], envf: Env) => wrap(sym match {
+        case INT_PLUS_INT    => binOp[Int, Int](value, args, envf, _ + _)
+        case INT_PLUS_FLOAT  => binOp[Int, Float](value, args, envf, _ + _)
+        case INT_LESS_INT    => binOp[Int, Int](value, args, envf, _ < _)
+        case INT_EQEQ_INT    => binOp[Int, Int](value, args, envf, _ == _)
         case other => UnsupportedEmulation(sym)
-      }, env)
+      }, envf)
 
       new CallableValue(f)
     }
