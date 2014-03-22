@@ -44,7 +44,6 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     // case q"{ case ..$cases }"              => never going to happen, because typer desugars these trees into anonymous class instantiations
     case q"while ($cond) $body"               => evalWhile(cond, body, env)
     case q"do $body while ($cond)"            => ???
-    //FIXME: if and while trees match Block while not inheriting from it; bug?
     case q"{ ..$stats }"                      => evalBlock(stats, env)
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
@@ -141,7 +140,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     // when evaluating a block, we can delegate introduction of locals to eval - it will update env and push the updates to us
     // when exiting a block, we just drop the local environment that we have accumulated without having to rollback anything
     val Results(_ :+ vstats, env1) = eval(stats, env)
-    Result(vstats, env1.gc(vstats))
+    Result(vstats, env.extend(env1.heap))
   }
 
   def evalSelect(qual: Tree, sym: Symbol, env: Env): Result = {
@@ -192,14 +191,9 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     def extend(sym: Symbol, value: Value): Env = {
       // TODO: extend scope with a local symbol bound to an associated value
       stack.head.get(sym) match {
-        case Some(v) =>
-          // update
-          Env(stack.head + (sym -> value) :: stack.tail, heap + (v -> Primitive(value.reify(this).get)))
-        case None =>
-          // introduce
-          Env(stack.head + (sym -> value) :: stack.tail, heap)
+        case Some(v) => Env(stack, heap + (v -> Primitive(value.reify(this).get)))
+        case None    => Env((stack.head + (sym -> value)) :: stack.tail, heap)
       }
-
     }
     def extend(obj: Value, field: Symbol, value: Value): Env = {
       // TODO: extend heap with the new value for the given field of the given object
@@ -210,8 +204,6 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       Env(stack, this.heap ++ heap)
     }
     def extend(v: Value, a: Any): Env = {
-      // operation with side effects since heap is mutable object
-      // extends heap with reflected value
       Env(stack, heap + (v -> Primitive(a)))
     }
     def gc(expr: Value): Env = {
@@ -256,8 +248,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       reify(env) match {
         case Some(true)  => then1
         case Some(false) => else1
-        case None        => ???
-        case _           => ???
+        case other       => IllegalState(other)
       }
     }
   }

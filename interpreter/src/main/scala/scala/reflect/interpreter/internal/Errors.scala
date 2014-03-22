@@ -20,4 +20,6 @@ trait Errors {
   def RuntimeReflectionNotSupported(tree: Tree) = sys.error(s"runtime reflection is not supported: $tree")
 
   def UnsupportedEmulation(symbol: Symbol) = sys.error(s"emulation of symbol ${showDecl(symbol)} is not supported")
+
+  def IllegalState(culprit: Any) = sys.error(s"Emulator ended up in illegal sate, culprit: $culprit")
 }
