@@ -134,7 +134,7 @@ object build extends Build {
   ) settings (
     sharedSettings: _*
   ) settings (
-    libraryDependencies += "org.scalatest" %% "scalatest" % "2.1.0" % "test",
+    libraryDependencies += "org.scalatest" %% "scalatest" % "2.1.2" % "test",
     libraryDependencies += "org.scalacheck" %% "scalacheck" % "1.11.3" % "test",
     scalacOptions ++= Seq()
   ) dependsOn (interpreter)
