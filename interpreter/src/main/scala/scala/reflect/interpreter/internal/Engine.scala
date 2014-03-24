@@ -115,7 +115,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       case tree: ModuleDef =>
         Value.module(tree.symbol.asModule, env)
       case tree: DefDef =>
-        Value.method(tree.symbol.asMethod, env)
+        Value.method(tree.rhs, tree.symbol.asMethod, env)
     }
     val env2 = env.extend(env1.heap).extend(tree.symbol, vrepr)
     Value.reflect((), env2)
@@ -206,6 +206,11 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     def extend(v: Value, a: Any): Env = {
       Env(stack, heap + (v -> Primitive(a)))
     }
+    def pushFrame = Env(Map[Symbol, Value]() +: stack, heap)
+    def extend(other: Env) = {
+      // import variables from another frame - captures variables in lambdas
+      Env((stack.head ++ other.stack.head) :: stack.tail, this.heap ++ other.heap)
+    }
     def gc(expr: Value): Env = {
       // clean up heap: remove intermediate evaluation results, out-of-scope locals
       // expr stands for 'expr' in block, we don't want return value to be deleted
@@ -234,6 +239,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       // TODO: needs to handle selections of field and method references
       // because e.g. foo.bar(1, 2) looks like Apply(Select(foo, bar), List(1, 2))
       // TODO: same todos as for Env.lookup
+      // TODO: implement all Any methods such as hashCode/etc here
       ???
     }
     def apply(args: List[Value], env: Env): Result = {
@@ -259,8 +265,34 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     }
   }
 
-  case class CallableValue(f: (List[Value], Env) => Result) extends Value {
+  trait CallableValue extends Value
+
+  case class EmulatedCallableValue(f: (List[Value], Env) => Result) extends CallableValue {
     override def apply(args: List[Value], env: Env) = f(args, env)
+  }
+
+  case class FunctionValue(params: List[Tree], body: Tree, capturedEnv: Env) extends CallableValue {
+    override def apply(args: List[Value], callSiteEnv: Env): Result = {
+      val Results(_, penv) = eval(params, callSiteEnv)
+      val e = penv.pushFrame.extend(capturedEnv)
+      val argsEnv = params.map(it=>it.symbol).zip(args).foldLeft(e)((penv, p) => penv.extend(p._1, p._2))
+      val Result(res, resenv) = eval(body, argsEnv)
+      Result(res, callSiteEnv.extend(resenv.heap))
+    }
+
+    override def select(member: Symbol, env: Env): Result = {
+      // for now we assume user cannot select methods other than apply from a function
+      Result(this, env)
+    }
+  }
+
+  case class MethodValue(body: Tree, sym: MethodSymbol, capturedEnv: Env) extends CallableValue {
+    override def apply(args: List[Value], callSiteEnv: Env) = {
+      val e = callSiteEnv.pushFrame.extend(capturedEnv)
+      val ex = sym.paramLists.head.zip(args).foldLeft(e)((penv, p) => penv.extend(p._1, p._2))
+      val Result(v, newenv) = eval(body, ex.extend(sym, this))
+      Result(v, callSiteEnv.extend(newenv.heap))
+    }
   }
 
   object Value {
@@ -274,7 +306,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     def function(params: List[Tree], body: Tree, env: Env): Result = {
       // TODO: wrap a function in an interpreter value using the provided lexical environment
       // note how useful it is that Env is immutable!
-      ???
+      Result(FunctionValue(params, body, env), env)
     }
     def instantiate(cls: ClassSymbol, env: Env): Result = {
       // TODO: instantiate a class (not a type like List[Int], but a class like List, because we need to model erasure)
@@ -285,9 +317,8 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       // TODO: create an interpreter value that corresponds to the object represented by the symbol
       ???
     }
-    def method(meth: MethodSymbol, env: Env): Result = {
-      // TODO: create an interpreter value that corresponds to the method represented by the symbol
-      ???
+    def method(tree: Tree, meth: MethodSymbol, env: Env): Result = {
+      Result(MethodValue(tree, meth, env), env)
     }
   }
 
