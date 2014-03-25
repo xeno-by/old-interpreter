@@ -43,7 +43,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     case q"(..$params) => $body"              => Value.function(params, body, env)
     // case q"{ case ..$cases }"              => never going to happen, because typer desugars these trees into anonymous class instantiations
     case q"while ($cond) $body"               => evalWhile(cond, body, env)
-    case q"do $body while ($cond)"            => ???
+    case q"do $body while ($cond)"            => evalDoWhile(cond, body, env)
     case q"{ ..$stats }"                      => evalBlock(stats, env)
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
@@ -152,7 +152,6 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     // named and default args are already desugared by scalac, so we just perform straightforward evaluation
     // TODO: this will not be the case for palladium, but we'll see to that later
     // TODO: need to handle varargs (represented by q"arg: _*")
-    // TODO: push stack frame
     val Result(vexpr, env1) = eval(expr, env)
     val Results(vargs, env2) = eval(args, env1)
     vexpr.apply(vargs, env2)
@@ -172,6 +171,16 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     } else Value.reflect((), condenv)
   }
 
+  @tailrec
+  private def evalDoWhile(cond: Tree, body: Tree, env: Env): Result = {
+    val Result(_, bodyEnv) = eval(body, env)
+    val Result(vcond, condEnv) = eval(cond, env.extend(bodyEnv.heap))
+    if(vcond.reify(condEnv).get.asInstanceOf[Boolean])
+      evalDoWhile(cond, body, condEnv)
+    else
+      Value.reflect((), condEnv)
+  }
+
   sealed trait Slot
   final case class Primitive(value: Any) extends Slot
   final case class Object(fields: Map[Symbol, Value]) extends Slot
@@ -189,7 +198,6 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       Result(stack.head(sym), this)
     }
     def extend(sym: Symbol, value: Value): Env = {
-      // TODO: extend scope with a local symbol bound to an associated value
       stack.head.get(sym) match {
         case Some(v) => Env(stack, heap + (v -> Primitive(value.reify(this).get)))
         case None    => Env((stack.head + (sym -> value)) :: stack.tail, heap)
@@ -200,7 +208,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       ???
     }
     def extend(heap: Heap): Env = {
-      // TODO: import heap from another environment
+      // import heap from another environment
       Env(stack, this.heap ++ heap)
     }
     def extend(v: Value, a: Any): Env = {
@@ -222,7 +230,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
 
   sealed trait Value {
     def reify(env: Env): Option[Any] = {
-      // TODO: convert this interpreter value to a JVM value
+      // convert this interpreter value to a JVM value
       // return None if it refers to a not-yet-compiled class
       // note that it is probably possible to improve reify to work correctly in all cases
       // however this doesn't matter much for Project Palladium, so that's really low priority
@@ -250,7 +258,6 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       ???
     }
     def branch[T](then1: => T, else1: => T, env: Env): T = {
-      // TODO: should be easy - check whether it's a boolean and then branch appropriately
       reify(env) match {
         case Some(true)  => then1
         case Some(false) => else1
@@ -297,14 +304,14 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
 
   object Value {
     def reflect(any: Any, env: Env): Result = {
-      // TODO: wrap a JVM value in an interpreter value
+      // wrap a JVM value in an interpreter value
       // strictly speaking, env is unnecessary here, because this shouldn't be effectful
       // but I'm still threading it though here, because who knows
       val value = new JvmValue()
       Result(value, env.extend(value, any))
     }
     def function(params: List[Tree], body: Tree, env: Env): Result = {
-      // TODO: wrap a function in an interpreter value using the provided lexical environment
+      // wrap a function in an interpreter value using the provided lexical environment
       // note how useful it is that Env is immutable!
       Result(FunctionValue(params, body, env), env)
     }

@@ -14,4 +14,12 @@ class WhileSuite extends FunSuite {
     assert(ctfe { var i = 0; var j = 0; while (i < 10) { while (j < i) {j=j+i}; i=i+1 };i+j } == 25)
   }
   
+  test("side effects in condition") {
+    assert(ctfe { var v = 0; while({v = 100; false}) {}; v } == 100)
+  }
+
+  test("do while simple") {
+    assert(ctfe { var v = 0; do {v = v+1} while (v<0); v } == 1)
+  }
+  
 }
