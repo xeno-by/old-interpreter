@@ -27,13 +27,13 @@ trait Emulators {
         def binOp[T, K](f: (T, K) => Any) = f(value.reify(envf).get.asInstanceOf[T],
           args.head.reify(envf).get.asInstanceOf[K])
         wrap(sym match {
-          case INT_PLUS_INT => binOp[Int, Int](_ + _)
-          case INT_MINUS_INT => binOp[Int, Int](_ - _)
-          case INT_LESS_INT => binOp[Int, Int](_ < _)
-          case INT_GT_INT => binOp[Int, Int](_ > _)
-          case INT_EQEQ_INT => binOp[Int, Int](_ == _)
-          case INT_PLUS_FLOAT => binOp[Int, Float](_ + _)
-          case other => UnsupportedEmulation(sym)
+          case INT_PLUS_INT     => binOp[Int, Int](_ + _)
+          case INT_MINUS_INT    => binOp[Int, Int](_ - _)
+          case INT_LESS_INT     => binOp[Int, Int](_ < _)
+          case INT_GT_INT       => binOp[Int, Int](_ > _)
+          case INT_EQEQ_INT     => binOp[Int, Int](_ == _)
+          case INT_PLUS_FLOAT   => binOp[Int, Float](_ + _)
+          case other            => UnsupportedEmulation(sym)
         }, envf)
       }
 

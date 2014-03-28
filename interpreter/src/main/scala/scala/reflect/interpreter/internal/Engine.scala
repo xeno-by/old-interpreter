@@ -293,7 +293,8 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       // wrap a JVM value in an interpreter value
       // strictly speaking, env is unnecessary here, because this shouldn't be effectful
       // but I'm still threading it though here, because who knows
-      Result(new JvmValue(), env.extend(value, any))
+      val value = new JvmValue()
+      Result(value, env.extend(value, any))
     }
     def function(params: List[Tree], body: Tree, env: Env): Result = {
       // wrap a function in an interpreter value using the provided lexical environment
