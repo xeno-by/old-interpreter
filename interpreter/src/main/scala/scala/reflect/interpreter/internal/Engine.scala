@@ -115,9 +115,9 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       case tree: ModuleDef =>
         Value.module(tree.symbol.asModule, env)
       case tree: DefDef =>
-        Value.method(tree.rhs, tree.symbol.asMethod, env)
+        Value.method(tree.symbol.asMethod, env)
     }
-    val env2 = env.extend(env1.heap).extend(tree.symbol, vrepr)
+    val env2 = env.extendHeap(env1).extend(tree.symbol, vrepr)
     Value.reflect((), env2)
   }
 
@@ -140,7 +140,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     // when evaluating a block, we can delegate introduction of locals to eval - it will update env and push the updates to us
     // when exiting a block, we just drop the local environment that we have accumulated without having to rollback anything
     val Results(_ :+ vstats, env1) = eval(stats, env)
-    Result(vstats, env.extend(env1.heap))
+    Result(vstats, env.extendHeap(env1))
   }
 
   def evalSelect(qual: Tree, sym: Symbol, env: Env): Result = {
@@ -158,6 +158,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
   }
 
   def evalIf(cond: Tree, then1: Tree, else1: Tree, env: Env): Result = {
+    // TODO: handle reify side-effects in branches
     val Result(vcond, env1) = eval(cond, env)
     vcond.branch(eval(then1, env1), eval(else1, env1), env1)
   }
@@ -171,14 +172,9 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     } else Value.reflect((), condenv)
   }
 
-  @tailrec
   private def evalDoWhile(cond: Tree, body: Tree, env: Env): Result = {
     val Result(_, bodyEnv) = eval(body, env)
-    val Result(vcond, condEnv) = eval(cond, env.extend(bodyEnv.heap))
-    if(vcond.reify(condEnv).get.asInstanceOf[Boolean])
-      evalDoWhile(cond, body, condEnv)
-    else
-      Value.reflect((), condEnv)
+    evalWhile(cond, body, bodyEnv)
   }
 
   sealed trait Slot
@@ -207,24 +203,15 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       // TODO: extend heap with the new value for the given field of the given object
       ???
     }
-    def extend(heap: Heap): Env = {
+    def extendHeap(other: Env): Env = {
       // import heap from another environment
-      Env(stack, this.heap ++ heap)
+      Env(stack, heap ++ other.heap)
     }
     def extend(v: Value, a: Any): Env = {
       Env(stack, heap + (v -> Primitive(a)))
     }
-    def pushFrame = Env(Map[Symbol, Value]() +: stack, heap)
-    def extend(other: Env) = {
-      // import variables from another frame - captures variables in lambdas
-      Env((stack.head ++ other.stack.head) :: stack.tail, this.heap ++ other.heap)
-    }
-    def gc(expr: Value): Env = {
-      // clean up heap: remove intermediate evaluation results, out-of-scope locals
-      // expr stands for 'expr' in block, we don't want return value to be deleted
-      // TODO: this is slow as hell and even more inefficient than one could imagine
-      val diff = heap.keySet -- stack.flatten.map(x => x._2) - expr
-      Env(stack, heap -- diff)
+    def pushFrame(other: Env) = {
+      Env(other.stack.head +: stack, heap)
     }
   }
 
@@ -234,9 +221,10 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       // return None if it refers to a not-yet-compiled class
       // note that it is probably possible to improve reify to work correctly in all cases
       // however this doesn't matter much for Project Palladium, so that's really low priority
+      // TODO: throw an exception when trying to reify an object
       env.heap.get(this) match {
         case Some(Primitive(v)) => Some(v)
-        case Some(_:Object)     => ??? // FIXME: what would the result of reifying an object be?
+        case Some(_:Object)     => ???
         case None               => None
       }
     }
@@ -258,6 +246,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       ???
     }
     def branch[T](then1: => T, else1: => T, env: Env): T = {
+      // TODO: pass env into branches to handle side-effects of reify
       reify(env) match {
         case Some(true)  => then1
         case Some(false) => else1
@@ -266,7 +255,7 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     }
   }
 
-  class JvmValue() extends Value with ExplicitEmulator {
+  class JvmValue() extends Value with MagicMethodEmulator {
     override def select(member:  Symbol, env: Env): Result = {
       Result(selectCallable(this, member, env), env)
     }
@@ -278,27 +267,24 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
     override def apply(args: List[Value], env: Env) = f(args, env)
   }
 
-  case class FunctionValue(params: List[Tree], body: Tree, capturedEnv: Env) extends CallableValue {
+  case class FunctionValue(params: List[Symbol], body: Tree, capturedEnv: Env) extends CallableValue {
     override def apply(args: List[Value], callSiteEnv: Env): Result = {
-      val Results(_, penv) = eval(params, callSiteEnv)
-      val e = penv.pushFrame.extend(capturedEnv)
-      val argsEnv = params.map(it=>it.symbol).zip(args).foldLeft(e)((penv, p) => penv.extend(p._1, p._2))
-      val Result(res, resenv) = eval(body, argsEnv)
-      Result(res, callSiteEnv.extend(resenv.heap))
+      val env1 = callSiteEnv.pushFrame(capturedEnv).extendHeap(capturedEnv)
+      val env2 = params.zip(args).foldLeft(env1)((tmpEnv, p) => tmpEnv.extend(p._1, p._2))
+      val Result(res, env3) = eval(body, env2)
+      Result(res, callSiteEnv.extendHeap(env3))
     }
 
     override def select(member: Symbol, env: Env): Result = {
       // for now we assume user cannot select methods other than apply from a function
-      Result(this, env)
+      if (member.name.toString == "apply") Result(this, env) else ???
     }
   }
 
-  case class MethodValue(body: Tree, sym: MethodSymbol, capturedEnv: Env) extends CallableValue {
-    override def apply(args: List[Value], callSiteEnv: Env) = {
-      val e = callSiteEnv.pushFrame.extend(capturedEnv)
-      val ex = sym.paramLists.head.zip(args).foldLeft(e)((penv, p) => penv.extend(p._1, p._2))
-      val Result(v, newenv) = eval(body, ex.extend(sym, this))
-      Result(v, callSiteEnv.extend(newenv.heap))
+  case class MethodValue(sym: MethodSymbol, capturedEnv: Env) extends CallableValue {
+    override def apply(args: List[Value], callSiteEnv: Env): Result = {
+      val src = source(sym).asInstanceOf[DefDef].rhs
+      FunctionValue(sym.paramLists.head, src, capturedEnv.extend(sym, this)).apply(args, callSiteEnv)
     }
   }
 
@@ -307,13 +293,12 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       // wrap a JVM value in an interpreter value
       // strictly speaking, env is unnecessary here, because this shouldn't be effectful
       // but I'm still threading it though here, because who knows
-      val value = new JvmValue()
-      Result(value, env.extend(value, any))
+      Result(new JvmValue(), env.extend(value, any))
     }
     def function(params: List[Tree], body: Tree, env: Env): Result = {
       // wrap a function in an interpreter value using the provided lexical environment
       // note how useful it is that Env is immutable!
-      Result(FunctionValue(params, body, env), env)
+      Result(FunctionValue(params.map(_.symbol), body, env), env)
     }
     def instantiate(cls: ClassSymbol, env: Env): Result = {
       // TODO: instantiate a class (not a type like List[Int], but a class like List, because we need to model erasure)
@@ -324,8 +309,8 @@ abstract class Engine extends InterpreterRequires with Errors with Emulators {
       // TODO: create an interpreter value that corresponds to the object represented by the symbol
       ???
     }
-    def method(tree: Tree, meth: MethodSymbol, env: Env): Result = {
-      Result(MethodValue(tree, meth, env), env)
+    def method(meth: MethodSymbol, env: Env): Result = {
+      Result(MethodValue(meth, env), env)
     }
   }
 
