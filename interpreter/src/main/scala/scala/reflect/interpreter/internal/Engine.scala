@@ -2,6 +2,7 @@ package scala.reflect.interpreter
 package internal
 
 import scala.annotation.tailrec
+import scala.collection.immutable.ListMap
 
 abstract class Engine extends InterpreterRequires with Definitions with Errors with Emulators {
   import u._
@@ -17,7 +18,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       if (sub.tpe == null) UnattributedAst(sub)
       if (sub.symbol == NoSymbol) UnattributedAst(sub)
     })
-    val initialEnv = Env(List(Map()), Map())
+    val initialEnv = Env(List(ListMap()), ListMap())
     val (value, finalEnv) = eval(tree, initialEnv)
     val (result, _) = value.reify(finalEnv)
     result
@@ -286,10 +287,10 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   // can't make these classes final because of SI-4440
   sealed trait Slot
   case class Primitive(value: Any) extends Slot
-  case class Object(fields: Map[Symbol, Value]) extends Slot
-  type Heap = Map[Value, Slot]
+  case class Object(fields: ListMap[Symbol, Value]) extends Slot
+  type Heap = ListMap[Value, Slot]
 
-  type FrameStack = List[Map[Symbol, Value]]
+  type FrameStack = List[ListMap[Symbol, Value]]
 
   case class Env(stack: FrameStack, heap: Heap) {
     def lookup(sym: Symbol): Result = {
@@ -322,7 +323,11 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
   }
 
+  @volatile private var _nextId = new java.util.concurrent.atomic.AtomicInteger()
+  private def nextId() = _nextId.incrementAndGet()
+
   sealed trait Value {
+    val id = nextId()
     def reify(env: Env): JvmResult = {
       // convert this interpreter value to a JVM value
       // return None if it refers to a not-yet-compiled class
@@ -372,12 +377,13 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   class JvmValue() extends Value with MagicMethodEmulator {
-    override def select(member:  Symbol, env: Env): Result = {
+    override def select(member: Symbol, env: Env): Result = {
       (selectCallable(this, member, env), env)
     }
+    override def toString = s"JvmValue#" + id
   }
 
-  trait CallableValue extends Value
+  sealed trait CallableValue extends Value
 
   case class EmulatedCallableValue(f: (List[Value], Env) => Result) extends CallableValue {
     override def apply(args: List[Value], env: Env) = f(args, env)
