@@ -13,7 +13,7 @@ object build extends Build {
     publishMavenStyle := true,
     publishArtifact in Compile := false,
     publishArtifact in Test := false,
-    scalacOptions ++= Seq("-deprecation", "-feature", "-optimise"),
+    scalacOptions ++= Seq("-deprecation", "-feature", "-optimise", "-unchecked"),
     parallelExecution in Test := false, // hello, reflection sync!!
     logBuffered := false,
     scalaHome := {
@@ -108,8 +108,16 @@ object build extends Build {
     }
   }
 
+  lazy val root = Project(
+    id = "root",
+    base = file("root")
+  ) settings (
+    test in Test := (test in tests in Test).value,
+    publish := {}
+  ) aggregate (interpreter, tests)
+
   lazy val interpreter = Project(
-    id   = "interpreter",
+    id = "interpreter",
     base = file("interpreter")
   ) settings (
     publishableSettings: _*
@@ -120,7 +128,7 @@ object build extends Build {
   )
 
   lazy val sandbox = Project(
-    id   = "sandbox",
+    id = "sandbox",
     base = file("sandbox")
   ) settings (
     sharedSettings: _*
@@ -129,7 +137,7 @@ object build extends Build {
   ) dependsOn (interpreter)
 
   lazy val tests = Project(
-    id   = "tests",
+    id = "tests",
     base = file("tests")
   ) settings (
     sharedSettings: _*

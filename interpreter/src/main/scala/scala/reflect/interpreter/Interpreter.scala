@@ -2,7 +2,7 @@ package scala.reflect.interpreter
 
 // TODO: for now we work with scala-reflect.jar
 // later on when reflection core is ready, we'll switch to it
-import scala.reflect.api.Universe
+import scala.reflect.macros.Universe
 import scala.reflect.macros.blackbox.Context
 import internal.Engine
 import internal.Emulators
