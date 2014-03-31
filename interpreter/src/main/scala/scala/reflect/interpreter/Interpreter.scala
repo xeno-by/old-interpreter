@@ -5,6 +5,7 @@ package scala.reflect.interpreter
 import scala.reflect.macros.Universe
 import scala.reflect.macros.blackbox.Context
 import internal.Engine
+import internal.Emulators
 
 trait InterpreterRequires {
   val u: Universe
@@ -24,7 +25,7 @@ object interpret {
     import c.universe._
     val engine = new {
       val u: c.universe.type = c.universe
-    } with Engine with InterpreterRequires with InterpreterProvides {
+    } with Engine with Emulators with InterpreterRequires with InterpreterProvides{
       def source(sym: Symbol): MemberDef = {
         // TODO: general case of obtaining TSTs for symbols isn't implemented yet
         // therefore for now we only support whatever we can find directly in the interpretee
