@@ -1,6 +1,8 @@
 package scala.reflect.interpreter
 package internal
 
+import scala.annotation.tailrec
+
 abstract class Engine extends InterpreterRequires with Definitions with Errors with Emulators {
   import u._
   import definitions._
@@ -17,7 +19,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     })
     val initialEnv = Env(List(Map()), Map())
     val (value, finalEnv) = eval(tree, initialEnv)
-    value.reify(finalEnv).getOrElse(UnreifiableResult(value))
+    val (result, _) = value.reify(finalEnv)
+    result
   }
 
   def eval(tree: Tree, env: Env): Result = tree match {
@@ -171,15 +174,22 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   def evalIf(cond: Tree, then1: Tree, else1: Tree, env: Env): Result = {
     // TODO: handle reify side-effects in branches
     val (vcond, env1) = eval(cond, env)
-    vcond.branch(eval(then1, env1), eval(else1, env1), env1)
+    vcond.branch(env2 => eval(then1, env2), env2 => eval(else1, env2), env1)
   }
 
+  @tailrec
   private def evalWhile(cond: Tree, body: Tree, env: Env): Result = {
-    val (vcond, condenv) = eval(cond, env)
-    if (vcond.reify(condenv).get.asInstanceOf[Boolean]) {
-      val (_, env1) = eval(body, condenv)
-      evalWhile(cond, body, env1)
-    } else Value.reflect((), condenv)
+    val (vcond, env1) = eval(cond, env)
+    val (jcond, env2) = vcond.reify(env1)
+    jcond match {
+      case true =>
+        val (_, env3) = eval(body, env2)
+        evalWhile(cond, body, env3)
+      case false =>
+        Value.reflect((), env2)
+      case _ =>
+        IllegalState(jcond)
+    }
   }
 
   private def evalDoWhile(cond: Tree, body: Tree, env: Env): Result = {
@@ -197,22 +207,21 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     def evalPattern(vscrut: Value, pat: Tree, menv: Env, renv: Env): Result = {
       def checkCond(cond: Tree, onSuccess: (Env, Env) => Result = succeed, onFailure: (Env, Env) => Result = fail) = {
         val (vcond, menv1) = eval(cond, menv)
-        val renv1 = renv.extendHeap(menv1)
-        vcond.branch(onSuccess(menv1, renv1), onFailure(menv1, renv1), menv1)
+        vcond.branch(menv2 => onSuccess(menv2, renv.extendHeap(menv2)), menv2 => onFailure(menv2, renv.extendHeap(menv2)), menv1)
       }
       def checkPat(pat: Tree, onSuccess: (Env, Env) => Result = succeed, onFailure: (Env, Env) => Result = fail) = {
         val (vpat, renv1) = evalPattern(vscrut, pat, menv, renv)
         val menv1 = menv.extendHeap(renv1)
-        vpat.branch(onSuccess(menv1, renv1), onFailure(menv1, renv1), menv1)
+        vpat.branch(menv2 => onSuccess(menv2, renv1), menv2 => onFailure(menv2, renv1), menv1)
       }
       def checkEval(expr: Tree, cond: Value => Tree, result: Value => Tree, onSuccess: (Value, Env, Env) => Result) = {
         val (vexpr, menv1) = eval(expr, menv)
         val (vcond, menv2) = eval(cond(vexpr), menv1)
-        def cont = {
-          val (vresult, menv3) = eval(result(vexpr), menv2)
-          onSuccess(vresult, menv3, renv.extendHeap(menv3))
+        def cont(menv3: Env) = {
+          val (vresult, menv4) = eval(result(vexpr), menv3)
+          onSuccess(vresult, menv4, renv.extendHeap(menv4))
         }
-        vcond.branch(cont, fail(menv2, renv.extendHeap(menv2)), menv2)
+        vcond.branch(cont, menv3 => fail(menv3, renv.extendHeap(menv3)), menv2)
       }
       pat match {
         case Ident(termNames.WILDCARD) =>
@@ -256,7 +265,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         ???
       case (vscrut :: vrest, pat :: patrest) =>
         val (result, renv1) = evalPattern(vscrut, pat, menv, renv)
-        result.branch(evalPatterns(vrest, patrest, menv.extendHeap(renv1), renv1), fail(menv, renv1), renv1)
+        result.branch(renv2 => evalPatterns(vrest, patrest, menv.extendHeap(renv2), renv2), renv2 => fail(menv.extendHeap(renv2), renv2), renv1)
       case (Nil, Nil) =>
         succeed(menv, renv)
     }
@@ -264,7 +273,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       case CaseDef(pat, guard, body) :: rest =>
         val (vpat, env1) = evalPattern(vscrut, pat, env, env)
         val (vguard, env2) = eval(guard.orElse(q"true"), env1)
-        vguard.branch(eval(body, env2), loop(vscrut, rest, env2), env2)
+        vguard.branch(env3 => eval(body, env3), env3 => loop(vscrut, rest, env3), env2)
       case _ =>
         val (exn, env1) = Value.instantiate(typeOf[MatchError], env)
         val (exn1, env2) = exn.apply(List(vscrut), env1)
@@ -293,8 +302,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
     def extend(sym: Symbol, value: Value): Env = {
       stack.head.get(sym) match {
-        case Some(v) => Env(stack, heap + (v -> Primitive(value.reify(this).get)))
-        case None    => Env((stack.head + (sym -> value)) :: stack.tail, heap)
+        case Some(existing) => Env(stack, heap + (existing -> heap(value)))
+        case None           => Env((stack.head + (sym -> value)) :: stack.tail, heap)
       }
     }
     def extend(obj: Value, field: Symbol, value: Value): Env = {
@@ -314,16 +323,16 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   sealed trait Value {
-    def reify(env: Env): Option[Any] = {
+    def reify(env: Env): JvmResult = {
       // convert this interpreter value to a JVM value
       // return None if it refers to a not-yet-compiled class
       // note that it is probably possible to improve reify to work correctly in all cases
       // however this doesn't matter much for Project Palladium, so that's really low priority
       // TODO: throw an exception when trying to reify an object
       env.heap.get(this) match {
-        case Some(Primitive(v)) => Some(v)
-        case Some(_:Object)     => ???
-        case None               => None
+        case Some(Primitive(prim)) => (prim, env)
+        case Some(_)               => UnreifiableResult(this)
+        case None                  => IllegalState(this)
       }
     }
     def select(member: Symbol, env: Env): Result = {
@@ -343,12 +352,12 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // TODO: in the current model, constructors have to return the object being constructed
       ???
     }
-    def branch[T](then1: => T, else1: => T, env: Env): T = {
-      // TODO: pass env into branches to handle side-effects of reify
-      reify(env) match {
-        case Some(true)  => then1
-        case Some(false) => else1
-        case other       => IllegalState(other)
+    def branch[T](then1: Env => T, else1: Env => T, env: Env): T = {
+      val (jvalue, env1) = reify(env)
+      jvalue match {
+        case true => then1(env1)
+        case false => else1(env1)
+        case other => IllegalState(other)
       }
     }
     def typeTest(tpe: Type, env: Env): Result = {
@@ -426,5 +435,6 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   type Result = (Value, Env)
+  type JvmResult = (Any, Env)
   type Results = (List[Value], Env)
 }
