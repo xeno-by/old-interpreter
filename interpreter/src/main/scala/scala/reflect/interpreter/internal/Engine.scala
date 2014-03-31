@@ -96,17 +96,17 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   def evalLocal(tree: Tree, env: Env): Result = {
     val sym = tree.symbol
     def defaultValue(tpe: Type): Result = {
-      val jvmValue = sym match {
-        case sym if sym == UnitClass    => ()
-        case sym if sym == BooleanClass => false
-        case sym if sym == FloatClass   => 0.0f
-        case sym if sym == DoubleClass  => 0.0d
-        case sym if sym == ByteClass    => 0.toByte
-        case sym if sym == ShortClass   => 0.toShort
-        case sym if sym == IntClass     => 0
-        case sym if sym == LongClass    => 0L
-        case sym if sym == CharClass    => 0.toChar
-        case _                          => null
+      val jvmValue = tpe match {
+        case tpe if tpe == UnitTpe    => ()
+        case tpe if tpe == BooleanTpe => false
+        case tpe if tpe == FloatTpe   => 0.0f
+        case tpe if tpe == DoubleTpe  => 0.0d
+        case tpe if tpe == ByteTpe    => 0.toByte
+        case tpe if tpe == ShortTpe   => 0.toShort
+        case tpe if tpe == IntTpe     => 0
+        case tpe if tpe == LongTpe    => 0L
+        case tpe if tpe == CharTpe    => 0.toChar
+        case _                        => null
       }
       Value.reflect(jvmValue, env)
     }
