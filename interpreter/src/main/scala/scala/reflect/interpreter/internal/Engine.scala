@@ -53,7 +53,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
     // case q"new { ..$early } with ..$parents { $self => ..$stats }" => never going to happen in general case, desugared into selects/applications of New
-    case _: ValDef | _: ModuleDef | _: DefDef => evalLocal(tree, env) // can't skip these trees, because we need to enter them in scope when interpreting
+    case _: ValDef | _: DefDef                => evalLocal(tree, env) // can't skip these trees, because we need to enter them in scope when interpreting
+    case _: ModuleDef                         => evalModuleDef(tree, env)
     case _: MemberDef                         => eval(q"()", env) // skip these trees, because we have sym.source
     case _: Import                            => eval(q"()", env) // skip these trees, because it's irrelevant after typer, which has resolved all imports
     case _                                    => UnrecognizedAst(tree)
@@ -117,13 +118,15 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         // this is how Scala does it, so don't say that this looks weird :)
         val (vdefault, envx) = defaultValue(tpt.tpe)
         eval(rhs, envx.extend(tree.symbol, vdefault))
-      case tree: ModuleDef =>
-        Value.module(tree.symbol.asModule, env)
       case tree: DefDef =>
         Value.method(tree.symbol.asMethod, env)
     }
     val env2 = env.extendHeap(env1).extend(tree.symbol, vrepr)
-    Value.reflect((), env2)
+    (vrepr, env2)
+  }
+
+  def evalModuleDef(tree: Tree, env: Env): Result = {
+    Value.module(tree.symbol.asModule, tree.children, env)
   }
 
   def evalAssign(lhs: Tree, rhs: Tree, env: Env): Result = {
@@ -134,7 +137,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         val (vrhs, env1) = eval(rhs, env)
         Value.reflect((), env1.extend(lhs.symbol, vrhs))
       case Select(qual, _) => // someone's field
-        val (vlhs, env1) = eval(lhs, env)
+        val (vlhs, env1) = eval(qual, env)
         val (vrhs, env2) = eval(rhs, env1)
         Value.reflect((), env1.extend(vlhs, lhs.symbol, vrhs))
     }
@@ -150,7 +153,11 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
 
   def evalSelect(qual: Tree, sym: Symbol, env: Env): Result = {
     val (vqual, env1) = eval(qual, env)
-    vqual.select(sym, env1)
+    val (value, env2) = vqual.select(sym, env1)
+    value match {
+      case MethodValue(meth, _) if meth.paramLists.isEmpty => value.apply(Nil, env2)
+      case _                    => (value, env2)
+    }
   }
 
   def evalTypeTest(expr: Tree, tpe: Type, env: Env): Result = {
@@ -287,7 +294,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   // can't make these classes final because of SI-4440
   sealed trait Slot
   case class Primitive(value: Any) extends Slot
-  case class Object(fields: ListMap[Symbol, Value]) extends Slot
+  case class Object(fields: Map[Symbol, Value]) extends Slot
   type Heap = ListMap[Value, Slot]
 
   type FrameStack = List[ListMap[Symbol, Value]]
@@ -299,17 +306,28 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // TODO: evaluate nullary methods
       // all the stuff above might be effectful
       // therefore we return Result here, and not just Value
-      (stack.head(sym), this)
+      sym match {
+        case m: ModuleSymbol                     => stack.head(sym).init(this)
+        case mc: ClassSymbol if mc.isModuleClass => stack.head(mc.module).init(this)
+        case _                                   => (stack.head(sym), this)
+      }
     }
     def extend(sym: Symbol, value: Value): Env = {
       stack.head.get(sym) match {
-        case Some(existing) => Env(stack, heap + (existing -> heap(value)))
+        case Some(v: ReifiableValue) => Env(stack, heap + (v -> heap(value)))
+        case Some(v: Value)          => Env(stack, heap) // TODO: what do with unreifiable values
         case None           => Env((stack.head + (sym -> value)) :: stack.tail, heap)
       }
     }
     def extend(obj: Value, field: Symbol, value: Value): Env = {
       // TODO: extend heap with the new value for the given field of the given object
-      ???
+      heap(obj) match {
+        case Object(fields) => extend(obj, Object(fields + (field -> value)))
+        case _              => IllegalState(obj)
+      }
+    }
+    def extend(v: Value, s: Slot): Env = {
+      Env(stack, heap + (v -> s))
     }
     def extendHeap(other: Env): Env = {
       // import heap from another environment
@@ -374,25 +392,36 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // TODO: also, we have to deal with all sort of conversions built into Scala: boxings, numeric stuff, nulls, etc
       ???
     }
+    def init(env: Env): Result = (this, env)
   }
 
-  class JvmValue() extends Value with MagicMethodEmulator {
+  trait ReifiableValue
+
+  class JvmValue() extends Value with ReifiableValue with MagicMethodEmulator {
     override def select(member: Symbol, env: Env): Result = {
       (selectCallable(this, member, env), env)
     }
     override def toString = s"JvmValue#" + id
   }
 
-  sealed trait CallableValue extends Value
+  sealed trait CallableValue extends Value {
+    override def reify(env: Env): (Any, Env) = {
+      val (res, env1) = apply(List(), env)
+      res.reify(env1)
+    }
+  }
 
   case class EmulatedCallableValue(f: (List[Value], Env) => Result) extends CallableValue {
     override def apply(args: List[Value], env: Env) = f(args, env)
   }
 
-  case class FunctionValue(params: List[Symbol], body: Tree, capturedEnv: Env) extends CallableValue {
+  case class FunctionValue(paramss: Option[List[Symbol]], body: Tree, capturedEnv: Env) extends CallableValue {
     override def apply(args: List[Value], callSiteEnv: Env): Result = {
       val env1 = callSiteEnv.pushFrame(capturedEnv).extendHeap(capturedEnv)
-      val env2 = params.zip(args).foldLeft(env1)((tmpEnv, p) => tmpEnv.extend(p._1, p._2))
+      val env2 = paramss match {
+        case Some(params) => params.zip(args).foldLeft(env1)((tmpEnv, p) => tmpEnv.extend(p._1, p._2))
+        case None         => env1
+      }
       val (res, env3) = eval(body, env2)
       (res, callSiteEnv.extendHeap(env3))
     }
@@ -406,7 +435,32 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   case class MethodValue(sym: MethodSymbol, capturedEnv: Env) extends CallableValue {
     override def apply(args: List[Value], callSiteEnv: Env): Result = {
       val src = source(sym).asInstanceOf[DefDef].rhs
-      FunctionValue(sym.paramLists.head, src, capturedEnv.extend(sym, this)).apply(args, callSiteEnv)
+      FunctionValue(sym.paramLists.headOption, src, capturedEnv.extend(sym, this)).apply(args, callSiteEnv)
+    }
+  }
+
+  trait ObjectValue extends Value
+
+  case class ModuleValue(mod: ModuleSymbol, children: List[Tree]) extends ObjectValue {
+
+    var initialized = false
+
+    override def init(env: Env): Result = {
+      if (!initialized) {
+        initialized = true
+        val body = children.head.asInstanceOf[Template].body
+        val (res: List[Value], env1) = eval(body, env.extend(mod, this))
+        val env2 = env.extendHeap(env1).extend(this, Object(body.map(_.symbol).zip(res).toMap))
+        (this, env2)
+      } else (this, env)
+    }
+
+    override def select(member: Symbol, env: Env): (Value, Env) = {
+      val (res, env1) = init(env)
+      env1.heap(res) match {
+        case Object(fields) => (fields(member), env.extendHeap(env1))
+        case _              => IllegalState(member)
+      }
     }
   }
 
@@ -421,16 +475,17 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     def function(params: List[Tree], body: Tree, env: Env): Result = {
       // wrap a function in an interpreter value using the provided lexical environment
       // note how useful it is that Env is immutable!
-      (FunctionValue(params.map(_.symbol), body, env), env)
+      (FunctionValue(Some(params.map(_.symbol)), body, env), env)
     }
     def instantiate(tpe: Type, env: Env): Result = {
       // TODO: instantiate a type (can't use ClassSymbol instead of Type, because we need to support polymorphic arrays)
       // not sure whether we need env, because we don't actually call the constructor here, but let's have it just in case
       ???
     }
-    def module(mod: ModuleSymbol, env: Env): Result = {
+    def module(mod: ModuleSymbol, children: List[Tree], env: Env): Result = {
       // TODO: create an interpreter value that corresponds to the object represented by the symbol
-      ???
+      val value = ModuleValue(mod, children)
+      (value, env.extend(mod, value))
     }
     def method(meth: MethodSymbol, env: Env): Result = {
       (MethodValue(meth, env), env)
