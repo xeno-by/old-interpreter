@@ -117,7 +117,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         // note how we bind ValDef's name to the default value of the corresponding type when evaluating the rhs
         // this is how Scala does it, so don't say that this looks weird :)
         val (vdefault, envx) = defaultValue(tpt.tpe)
-        eval(rhs, envx.extend(tree.symbol, vdefault))
+        val (res, env1) = eval(rhs, envx.extend(tree.symbol, vdefault))
+        res.copy(env1)
       case tree: DefDef =>
         Value.method(tree.symbol.asMethod, env)
     }
@@ -135,7 +136,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     lhs match {
       case Ident(_) => // local value (things like `x` as in `this.x` have already been desugared by typer)
         val (vrhs, env1) = eval(rhs, env)
-        Value.reflect((), env1.extend(lhs.symbol, vrhs))
+        val (vrhsc, env2) = vrhs.copy(env1)
+        Value.reflect((), env2.extend(lhs.symbol, vrhsc))
       case Select(qual, _) => // someone's field
         val (vlhs, env1) = eval(qual, env)
         val (vrhs, env2) = eval(rhs, env1)
@@ -392,6 +394,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // TODO: also, we have to deal with all sort of conversions built into Scala: boxings, numeric stuff, nulls, etc
       ???
     }
+    def copy(env: Env): Result = (this, env)
     def init(env: Env): Result = (this, env)
   }
 
@@ -400,6 +403,11 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   class JvmValue() extends Value with ReifiableValue with MagicMethodEmulator {
     override def select(member: Symbol, env: Env): Result = {
       (selectCallable(this, member, env), env)
+    }
+    override def copy(env: Env) = {
+      val v = new JvmValue()
+      val (res, env1) = reify(env)
+      (v, env1.extend(v, res))
     }
     override def toString = s"JvmValue#" + id
   }
@@ -430,6 +438,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // for now we assume user cannot select methods other than apply from a function
       if (member.name.toString == "apply") (this, env) else ???
     }
+    override def toString = s"FunctionValue#" + id
   }
 
   case class MethodValue(sym: MethodSymbol, capturedEnv: Env) extends CallableValue {
@@ -437,6 +446,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       val src = source(sym).asInstanceOf[DefDef].rhs
       FunctionValue(sym.paramLists.headOption, src, capturedEnv.extend(sym, this)).apply(args, callSiteEnv)
     }
+    override def toString = s"MethodValue#" + id
   }
 
   trait ObjectValue extends Value
@@ -462,6 +472,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         case _              => IllegalState(member)
       }
     }
+    override def toString = s"ModuleValue#" + id
   }
 
   object Value {
