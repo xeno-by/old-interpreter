@@ -467,9 +467,14 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
 
     override def select(member: Symbol, env: Env): (Value, Env) = {
       val (res, env1) = init(env)
-      env1.heap(res) match {
-        case Object(fields) => (fields(member), env.extendHeap(env1))
-        case _              => IllegalState(member)
+      env1.heap.get(res) match {
+        case Some(Object(fields)) =>
+          fields.get(member) match {
+            case Some(value)             => (value, env.extendHeap(env1))
+            case None if member.isMethod => (MethodValue(member.asMethod, env1), env.extendHeap(env1))
+            case _                       => ???
+          }
+        case _                    => IllegalState(member)
       }
     }
     override def toString = s"ModuleValue#" + id
