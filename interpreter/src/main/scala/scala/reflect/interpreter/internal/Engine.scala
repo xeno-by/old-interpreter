@@ -55,6 +55,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // case q"new { ..$early } with ..$parents { $self => ..$stats }" => never going to happen in general case, desugared into selects/applications of New
     case _: ValDef | _: DefDef                => evalLocal(tree, env) // can't skip these trees, because we need to enter them in scope when interpreting
     case _: ModuleDef                         => evalModuleDef(tree, env)
+//    case _: ClassDef                          => evalClassDef(tree, env)
     case _: MemberDef                         => eval(q"()", env) // skip these trees, because we have sym.source
     case _: Import                            => eval(q"()", env) // skip these trees, because it's irrelevant after typer, which has resolved all imports
     case _                                    => UnrecognizedAst(tree)
@@ -127,7 +128,11 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   def evalModuleDef(tree: Tree, env: Env): Result = {
-    Value.module(tree.symbol.asModule, tree.children, env)
+    Value.module(tree.symbol.asModule, tree.children.head.asInstanceOf[Template].body, env)
+  }
+
+  def evalClassDef(tree: Tree, env: Env): Result = {
+    Value.reflect((), env)
   }
 
   def evalAssign(lhs: Tree, rhs: Tree, env: Env): Result = {
@@ -343,6 +348,12 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
   }
 
+  class ObjectEnv(stack: FrameStack, heap: Heap, symbolMappings: Map[Symbol, Symbol]) extends Env(stack, heap) {
+    override def lookup(sym: Symbol): (Value, Env) = {
+      super.lookup(symbolMappings.getOrElse(sym, sym))
+    }
+  }
+
   @volatile private var _nextId = new java.util.concurrent.atomic.AtomicInteger()
   private def nextId() = _nextId.incrementAndGet()
 
@@ -449,19 +460,41 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     override def toString = s"MethodValue#" + id
   }
 
-  trait ObjectValue extends Value
+  class ObjectValue(sym: Symbol, body: List[Tree]) extends Value {
+    def collectFields(parents: List[Symbol], env: Env): (Map[Symbol, Value], Env) = {
+      parents match {
+        case x::xs =>
+          if (x.isJava) (Map(), env)
+          else {
+            val (res1, env1) = collectFields(xs, env)
+            val body: List[Tree] = source(x) match {
+              case cd: ClassDef   => cd.children.head.asInstanceOf[Template].body
+              case md: ModuleDef  => md.children.head.asInstanceOf[Template].body
+              case other          => IllegalState(other)
+            }
+            val (res2: List[Value], env2) = eval(body, env1)
+            (body.map(_.symbol).zip(res2).toMap ++ res1, env2)
+          }
+        case _     => (Map(), env)
+      }
+    }
+    override def init(env: Env): (Value, Env) = {
+      val (inherited, env1) = collectFields(sym.typeSignature.baseClasses.filter(!_.isModuleClass),
+        sym.typeSignature.baseClasses.foldLeft(env)((tmpEnv, s) => tmpEnv.extend(s, this)))
+      val (res: List[Value], env2) = eval(body, env1.extend(sym, this))
+      val env3 = env.extendHeap(env2).extend(this, Object(inherited ++ body.map(_.symbol).zip(res).toMap))
+      (this, env3)
+    }
+  }
 
-  case class ModuleValue(mod: ModuleSymbol, children: List[Tree]) extends ObjectValue {
+  case class ModuleValue(mod: ModuleSymbol, body: List[Tree]) extends ObjectValue(mod, body) {
 
     var initialized = false
 
     override def init(env: Env): Result = {
       if (!initialized) {
         initialized = true
-        val body = children.head.asInstanceOf[Template].body
-        val (res: List[Value], env1) = eval(body, env.extend(mod, this))
-        val env2 = env.extendHeap(env1).extend(this, Object(body.map(_.symbol).zip(res).toMap))
-        (this, env2)
+        super.init(env)
       } else (this, env)
     }
 
