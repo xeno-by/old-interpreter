@@ -32,6 +32,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     case Ident(_)                             => env.lookup(tree.symbol) // q"$_" would've matched any tree, not just an ident
     case q"$qual.$_"                          => evalSelect(qual, tree.symbol, env)
     case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
+    case t:Super                              => evalSelectSuper(t, tree.symbol, env)
     case q"$_.this"                           => env.lookup(tree.symbol)
     case q"$expr.isInstanceOf[$tpt]()"        => evalTypeTest(expr, tpt.tpe, env)
     case q"$expr.asInstanceOf[$tpt]()"        => evalTypeCast(expr, tpt.tpe, env)
@@ -165,6 +166,11 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       case MethodValue(meth, _) if meth.paramLists.isEmpty => value.apply(Nil, env2)
       case _                    => (value, env2)
     }
+  }
+
+  def evalSelectSuper(qual: Super, sym: Symbol, env: Env): Result = {
+//    val (vqal, env1) = eval(qual.qual, env)
+    eval(qual.qual, env)
   }
 
   def evalTypeTest(expr: Tree, tpe: Type, env: Env): Result = {
@@ -460,12 +466,34 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     override def toString = s"MethodValue#" + id
   }
 
+  // a placeholder for java methods/methods with unobtainable source
+  case class DummyMethodValue(sym: MethodSymbol) extends CallableValue {
+    override def apply(args: List[Value], env: Env): (Value, Env) = {
+      Value.reflect((), env)
+    }
+    override def toString = s"DummyMethodValue#" + id
+  }
+
   class ObjectValue(sym: Symbol, body: List[Tree]) extends Value {
+    var initialized = false
+    class ObjectCons(parent: Value, sym: MethodSymbol, capturedEnv: Env) extends CallableValue {
+      override def apply(args: List[Value], env: Env): (Value, Env) = {
+        val (_, env1) = parent.init(env)
+        val cons = env1.heap.get(parent) match {
+          case Some(Object(fields)) => fields.getOrElse(sym, null)
+          case _ => ???
+        }
+        val (_, env2) = cons.apply(args, env1)
+        (parent, env.extendHeap(env2))
+      }
+    }
     def collectFields(parents: List[Symbol], env: Env): (Map[Symbol, Value], Env) = {
       parents match {
         case x::xs =>
+          // java classes have no obtainable source
           if (x.isJava) (Map(), env)
           else {
+            // assuming result of baseClasses is correctly linearized
             val (res1, env1) = collectFields(xs, env)
             val body: List[Tree] = source(x) match {
               case cd: ClassDef   => cd.children.head.asInstanceOf[Template].body
@@ -479,36 +507,45 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       }
     }
     override def init(env: Env): (Value, Env) = {
-      val (inherited, env1) = collectFields(sym.typeSignature.baseClasses.filter(!_.isModuleClass),
-        sym.typeSignature.baseClasses.foldLeft(env)((tmpEnv, s) => tmpEnv.extend(s, this)))
-      val (res: List[Value], env2) = eval(body, env1.extend(sym, this))
-      val env3 = env.extendHeap(env2).extend(this, Object(inherited ++ body.map(_.symbol).zip(res).toMap))
-      (this, env3)
+      if (initialized) {
+        (this, env)
+      } else {
+        initialized = true
+        val (inherited, env1) = collectFields(sym.typeSignature.baseClasses.filter(!_.isModuleClass),
+          sym.typeSignature.baseClasses.foldLeft(env)((tmpEnv, s) => tmpEnv.extend(s, this)))
+        val (res: List[Value], env2) = eval(body, env1.extend(sym, this))
+        val env3 = env.extendHeap(env2).extend(this, Object(inherited ++ body.map(_.symbol).zip(res).toMap))
+        (this, env3)
+      }
     }
+    def selectOverride(member: Symbol, env: Env): Result = {
+      val mem = sym.typeSignature.member(member.name)
+      env.heap.get(this) match {
+        case Some(Object(fields)) => (fields.getOrElse(mem, IllegalState(mem, "override not present")), env)
+        case _ => IllegalState(this)
+      }
+    }
+    override def select(member: Symbol, env: Env): (Value, Env) = {
+      env.heap.get(this) match {
+        // FIXME: we should emulate java.Object methods somehow
+        case _ if member.isJava   => (DummyMethodValue(member.asMethod), env)
+        case _ if member.isConstructor => (new ObjectCons(this, member.asMethod, env), env)
+        case _ if member.isMethod => selectOverride(member, env)
+        case Some(Object(fields)) =>
+          fields.get(member) match {
+            case Some(value)             => (value, env)
+            case _                       => IllegalState(member, "no such field")
+          }
+        case _                    => UninitializedObject(this)
+      }
+    }
+    override def toString = s"ObjectValue#" + id
   }
 
   case class ModuleValue(mod: ModuleSymbol, body: List[Tree]) extends ObjectValue(mod, body) {
-
-    var initialized = false
-
-    override def init(env: Env): Result = {
-      if (!initialized) {
-        initialized = true
-        super.init(env)
-      } else (this, env)
-    }
-
     override def select(member: Symbol, env: Env): (Value, Env) = {
-      val (res, env1) = init(env)
-      env1.heap.get(res) match {
-        case Some(Object(fields)) =>
-          fields.get(member) match {
-            case Some(value)             => (value, env.extendHeap(env1))
-            case None if member.isMethod => (MethodValue(member.asMethod, env1), env.extendHeap(env1))
-            case _                       => ???
-          }
-        case _                    => IllegalState(member)
-      }
+      val (_, env1) = super.init(env)
+      super.select(member, env.extendHeap(env1))
     }
     override def toString = s"ModuleValue#" + id
   }
@@ -529,7 +566,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     def instantiate(tpe: Type, env: Env): Result = {
       // TODO: instantiate a type (can't use ClassSymbol instead of Type, because we need to support polymorphic arrays)
       // not sure whether we need env, because we don't actually call the constructor here, but let's have it just in case
-      ???
+      val v = new ObjectValue(tpe.typeSymbol, source(tpe.typeSymbol).children.head.asInstanceOf[Template].body)
+      (v, env.extend(tpe.typeSymbol, v))
     }
     def module(mod: ModuleSymbol, children: List[Tree], env: Env): Result = {
       // TODO: create an interpreter value that corresponds to the object represented by the symbol
