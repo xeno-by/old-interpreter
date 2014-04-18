@@ -27,12 +27,34 @@ class OOSuite extends FunSuite {
     assert(ctfe { class A{def f() = 100}; class B extends A{def f() = 42}; (new B).f() } == 42)
   }
 
+  test("polymorphic method call") {
+    assert(ctfe {
+      class A { def f() = 100}
+      class B extends A { def f() = 42}
+      val b: A = new B
+      b.f()
+    } == 42)
+  }
+
+  test("polymorphic val") {
+    assert(ctfe {
+      class A { val v = 99}
+      class B extends A { val v = 42}
+      val b: A = new B
+      b.v
+    } == 42)
+  }
+
   test("runtime polymorphism with a callback") {
     assert(ctfe {
       class A { def f() = 999; def g() = f() + 2}
       class B extends A {override def f() = 40}
       (new B).g()
     } == 42)
+  }
+
+  test("constructor simple") {
+    assert(ctfe { class A(val v: Int); new A(42).v } == 42 )
   }
 
 }
