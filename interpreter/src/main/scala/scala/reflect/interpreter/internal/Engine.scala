@@ -448,7 +448,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
 
   case class FunctionValue(paramss: Option[List[Symbol]], body: Tree, capturedEnv: Env) extends CallableValue {
     override def apply(args: List[Value], callSiteEnv: Env): Result = {
-      val env1 = callSiteEnv.pushFrame(capturedEnv).extendHeap(capturedEnv)
+      val env1 = callSiteEnv.pushFrame(capturedEnv)
       val env2 = paramss match {
         case Some(params) => params.zip(args).foldLeft(env1)((tmpEnv, p) => tmpEnv.extend(p._1, p._2))
         case None         => env1
