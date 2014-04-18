@@ -339,6 +339,12 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         case _              => IllegalState(obj)
       }
     }
+    def extend(obj: Value, newFields: Map[Symbol, Value]): Env = {
+      heap(obj) match {
+        case Object(fields) => extend(obj, Object(fields ++ newFields))
+        case _              => IllegalState(obj)
+      }
+    }
     def extend(v: Value, s: Slot): Env = {
       Env(stack, heap + (v -> s))
     }
@@ -476,15 +482,24 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
 
   class ObjectValue(sym: Symbol, body: List[Tree]) extends Value {
     var initialized = false
-    class ObjectCons(parent: Value, sym: MethodSymbol, capturedEnv: Env) extends CallableValue {
+    class ObjectCons(parent: Value, sym: MethodSymbol, capturedEnv: Env) extends MethodValue(sym, capturedEnv) {
+      def extractConsArgs(tree: MemberDef, args: List[ValDef]): List[Symbol] = {
+        // workaround constructor args symbol resolution bug
+        // extract symbols from valdefs of class body by name
+        // FIXME: there seems to be another bug, this time with names: an extra whitespace is appended to name in valdef symbol
+        val valDefs = tree.children.head.asInstanceOf[Template].body.collect({case d: ValDef => d}).map(it=>(it.name.toString.trim, it)).toMap
+        args.map(it => valDefs(it.name.toString).symbol)
+      }
       override def apply(args: List[Value], env: Env): (Value, Env) = {
-        val (_, env1) = parent.init(env)
-        val cons = env1.heap.get(parent) match {
-          case Some(Object(fields)) => fields.getOrElse(sym, null)
-          case _ => ???
+        val (paramss, earlydefns, stats:List[Tree], parents) = source(sym.owner) match {
+          case q"$_ class $_[..$_] $_(...$paramss) extends { ..$earlydefns } with ..$parents { $_ => ..$stats }" =>
+            (paramss, earlydefns, stats, parents)
         }
-        val (_, env2) = cons.apply(args, env1)
-        (parent, env.extendHeap(env2))
+        val valDefs = extractConsArgs(source(sym.owner), paramss.flatten.asInstanceOf[List[ValDef]])
+        val (_, env1) = super.apply(args, env.extend(parent, valDefs.zip(args).toMap))
+        val (res: List[Value], env2) = eval(stats, env1)
+        val env3 = env2.extend(parent, stats.map(_.symbol).zip(res).toMap)
+        (parent, env.extendHeap(env3))
       }
     }
     def collectFields(parents: List[Symbol], env: Env): (Map[Symbol, Value], Env) = {
@@ -521,16 +536,19 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     def selectOverride(member: Symbol, env: Env): Result = {
       val mem = sym.typeSignature.member(member.name)
       env.heap.get(this) match {
-        case Some(Object(fields)) => (fields.getOrElse(mem, IllegalState(mem, "override not present")), env)
+        case Some(Object(fields)) => (fields.getOrElse(mem, MethodValue(mem.asMethod, env)), env)
         case _ => IllegalState(this)
       }
     }
     override def select(member: Symbol, env: Env): (Value, Env) = {
+      // point all parent symbol references to this instance
+      val env1 = sym.typeSignature.baseClasses.foldLeft(env)((tmpEnv, parent) => tmpEnv.extend(parent, this))
       env.heap.get(this) match {
         // FIXME: we should emulate java.Object methods somehow
         case _ if member.isJava   => (DummyMethodValue(member.asMethod), env)
-        case _ if member.isConstructor => (new ObjectCons(this, member.asMethod, env), env)
-        case _ if member.isMethod => selectOverride(member, env)
+        case _ if member.isConstructor =>
+          (new ObjectCons(this, member.asMethod, env1.extend(sym, this)), env)
+        case _ if member.isMethod => selectOverride(member, env1)
         case Some(Object(fields)) =>
           fields.get(member) match {
             case Some(value)             => (value, env)
@@ -567,7 +585,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // TODO: instantiate a type (can't use ClassSymbol instead of Type, because we need to support polymorphic arrays)
       // not sure whether we need env, because we don't actually call the constructor here, but let's have it just in case
       val v = new ObjectValue(tpe.typeSymbol, source(tpe.typeSymbol).children.head.asInstanceOf[Template].body)
-      (v, env.extend(tpe.typeSymbol, v))
+      (v, env.extend(tpe.typeSymbol, v).extend(v, new Object(Map())))
     }
     def module(mod: ModuleSymbol, children: List[Tree], env: Env): Result = {
       // TODO: create an interpreter value that corresponds to the object represented by the symbol
