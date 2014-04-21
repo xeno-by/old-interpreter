@@ -27,6 +27,10 @@ class OOSuite extends FunSuite {
     assert(ctfe { class A{def f() = 100}; class B extends A{def f() = 42}; (new B).f() } == 42)
   }
 
+  test("simple super call") {
+    assert(ctfe { class A{def f() = 100}; class B extends A{def f() = super.f()+42}; (new B).f() } == 142)
+  }
+
   test("polymorphic method call") {
     assert(ctfe {
       class A { def f() = 100}
@@ -55,6 +59,10 @@ class OOSuite extends FunSuite {
 
   test("constructor simple") {
     assert(ctfe { class A(val v: Int); new A(42).v } == 42 )
+  }
+
+  test("constructor initialization order") {
+    assert(ctfe { class A(var v: Int){v = 42}; new A(999).v } == 42)
   }
 
 }

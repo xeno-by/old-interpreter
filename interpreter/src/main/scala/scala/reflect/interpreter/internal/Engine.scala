@@ -31,8 +31,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     case New(_)                               => Value.instantiate(tree.tpe, env)
     case Ident(_)                             => env.lookup(tree.symbol) // q"$_" would've matched any tree, not just an ident
     case q"$qual.$_"                          => evalSelect(qual, tree.symbol, env)
-    case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
-    case t:Super                              => evalSelectSuper(t, tree.symbol, env)
+//    case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
     case q"$_.this"                           => env.lookup(tree.symbol)
     case q"$expr.isInstanceOf[$tpt]()"        => evalTypeTest(expr, tpt.tpe, env)
     case q"$expr.asInstanceOf[$tpt]()"        => evalTypeCast(expr, tpt.tpe, env)
@@ -50,6 +49,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // case q"{ case ..$cases }"              => never going to happen, because typer desugars these trees into anonymous class instantiations
     case q"while ($cond) $body"               => evalWhile(cond, body, env)
     case q"do $body while ($cond)"            => evalDoWhile(cond, body, env)
+    case s: Super                             => eval(s.qual, env)
     case q"{ ..$stats }"                      => evalBlock(stats, env)
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
@@ -161,16 +161,14 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
 
   def evalSelect(qual: Tree, sym: Symbol, env: Env): Result = {
     val (vqual, env1) = eval(qual, env)
-    val (value, env2) = vqual.select(sym, env1)
+    val (value, env2) = qual match {
+      case _:Super  => vqual.select(sym, env1, _super = true)
+      case _        => vqual.select(sym, env1)
+    }
     value match {
       case MethodValue(meth, _) if meth.paramLists.isEmpty => value.apply(Nil, env2)
       case _                    => (value, env2)
     }
-  }
-
-  def evalSelectSuper(qual: Super, sym: Symbol, env: Env): Result = {
-//    val (vqal, env1) = eval(qual.qual, env)
-    eval(qual.qual, env)
   }
 
   def evalTypeTest(expr: Tree, tpe: Type, env: Env): Result = {
@@ -383,7 +381,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         case None                  => IllegalState(this)
       }
     }
-    def select(member: Symbol, env: Env): Result = {
+    def select(member: Symbol, env: Env, _super: Boolean = false): Result = {
       // note that we need env here, because selection might be effectful
       // also note that there's no need to evaluate empty-arglist methods here
       // if we have an empty-arglist application, then the result of select will be fed into apply(Nil)
@@ -424,7 +422,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   trait ReifiableValue
 
   class JvmValue() extends Value with ReifiableValue with MagicMethodEmulator {
-    override def select(member: Symbol, env: Env): Result = {
+    override def select(member: Symbol, env: Env, _super: Boolean = false): Result = {
       (selectCallable(this, member, env), env)
     }
     override def copy(env: Env) = {
@@ -457,7 +455,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       (res, callSiteEnv.extendHeap(env3))
     }
 
-    override def select(member: Symbol, env: Env): Result = {
+    override def select(member: Symbol, env: Env, _super: Boolean = false): Result = {
       // for now we assume user cannot select methods other than apply from a function
       if (member.name.toString == "apply") (this, env) else ???
     }
@@ -533,14 +531,19 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         (this, env3)
       }
     }
-    def selectOverride(member: Symbol, env: Env): Result = {
-      val mem = sym.typeSignature.member(member.name)
+    def selectOverride(member: Symbol, env: Env, _super: Boolean): Result = {
+      // for super calls we select member from a class symbol provided by member itself
+      // otherwise lookup a member from stored class symbol
+      val mem = if (_super)
+        member.owner.typeSignature.member(member.name)
+      else
+        sym.typeSignature.member(member.name)
       env.heap.get(this) match {
         case Some(Object(fields)) => (fields.getOrElse(mem, MethodValue(mem.asMethod, env)), env)
         case _ => IllegalState(this)
       }
     }
-    override def select(member: Symbol, env: Env): (Value, Env) = {
+    override def select(member: Symbol, env: Env, _super: Boolean = false): Result = {
       // point all parent symbol references to this instance
       val env1 = sym.typeSignature.baseClasses.foldLeft(env)((tmpEnv, parent) => tmpEnv.extend(parent, this))
       env.heap.get(this) match {
@@ -548,7 +551,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         case _ if member.isJava   => (DummyMethodValue(member.asMethod), env)
         case _ if member.isConstructor =>
           (new ObjectCons(this, member.asMethod, env1.extend(sym, this)), env)
-        case _ if member.isMethod => selectOverride(member, env1)
+        case _ if member.isMethod => selectOverride(member, env1, _super)
         case Some(Object(fields)) =>
           fields.get(member) match {
             case Some(value)             => (value, env)
@@ -561,7 +564,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   case class ModuleValue(mod: ModuleSymbol, body: List[Tree]) extends ObjectValue(mod, body) {
-    override def select(member: Symbol, env: Env): (Value, Env) = {
+    override def select(member: Symbol, env: Env, _super: Boolean = false): (Value, Env) = {
       val (_, env1) = super.init(env)
       super.select(member, env.extendHeap(env1))
     }
