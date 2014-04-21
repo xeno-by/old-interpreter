@@ -1,7 +1,11 @@
 import org.scalatest.FunSuite
 
 class BasicSuite extends FunSuite {
-	
+
+  test("unit value") {
+    assert(ctfe { ()  } == ())
+  }
+
   test("evaluates 42") {
     assert(ctfe(42) === 42)
   }
