@@ -444,15 +444,21 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     override def apply(args: List[Value], env: Env) = f(args, env)
   }
 
-  case class FunctionValue(paramss: Option[List[Symbol]], body: Tree, capturedEnv: Env) extends CallableValue {
+  case class FunctionValue(paramss: List[List[Symbol]], body: Tree, capturedEnv: Env) extends CallableValue {
     override def apply(args: List[Value], callSiteEnv: Env): Result = {
       val env1 = callSiteEnv.pushFrame(capturedEnv)
-      val env2 = paramss match {
-        case Some(params) => params.zip(args).foldLeft(env1)((tmpEnv, p) => tmpEnv.extend(p._1, p._2))
-        case None         => env1
+      paramss match {
+        case x :: Nil => // single parameter list - invoke
+          val env2 = x.zip(args).foldLeft(env1)((tmpEnv, p) => tmpEnv.extend(p._1, p._2))
+          val (res, env3) = eval(body, env2)
+          (res, callSiteEnv.extendHeap(env3))
+        case x :: xs => // multi parameter list - return curried function with N-1 parameter list
+          val env2 = x.zip(args).foldLeft(env1)((tmpEnv, p) => tmpEnv.extend(p._1, p._2))
+          (FunctionValue(xs, body, env2), callSiteEnv.extendHeap(env2))
+        case _ =>      // empty paramlist - invoke without extending env
+          val (res, env3) = eval(body, env1)
+          (res, callSiteEnv.extendHeap(env3))
       }
-      val (res, env3) = eval(body, env2)
-      (res, callSiteEnv.extendHeap(env3))
     }
 
     override def select(member: Symbol, env: Env, _super: Boolean = false): Result = {
@@ -465,7 +471,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   case class MethodValue(sym: MethodSymbol, capturedEnv: Env) extends CallableValue {
     override def apply(args: List[Value], callSiteEnv: Env): Result = {
       val src = source(sym).asInstanceOf[DefDef].rhs
-      FunctionValue(sym.paramLists.headOption, src, capturedEnv.extend(sym, this)).apply(args, callSiteEnv)
+      FunctionValue(sym.paramLists, src, capturedEnv.extend(sym, this)).apply(args, callSiteEnv)
     }
     override def toString = s"MethodValue#" + id
   }
@@ -582,7 +588,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     def function(params: List[Tree], body: Tree, env: Env): Result = {
       // wrap a function in an interpreter value using the provided lexical environment
       // note how useful it is that Env is immutable!
-      (FunctionValue(Some(params.map(_.symbol)), body, env), env)
+      (FunctionValue(List(params.map(_.symbol)), body, env), env)
     }
     def instantiate(tpe: Type, env: Env): Result = {
       // TODO: instantiate a type (can't use ClassSymbol instead of Type, because we need to support polymorphic arrays)
