@@ -14,6 +14,16 @@ class OOSuite extends FunSuite {
     assert(ctfe { class A {val v = 42}; class B extends A; (new B).v } == 42)
   }
 
+  test("multiple field inheritance") {
+    assert(ctfe {
+      trait A{def a = 10}
+      trait B{def b = 30}
+      trait C{def c = 2}
+      class F extends A with B with C {def f = a+b+c}
+      (new F).f
+    } == 42)
+  }
+
   test("mutable fields") {
     assert(ctfe {
       class A {var v = 100}
@@ -63,6 +73,10 @@ class OOSuite extends FunSuite {
 
   test("constructor initialization order") {
     assert(ctfe { class A(var v: Int){v = 42}; new A(999).v } == 42)
+  }
+
+  test("multiple parameter list cons") {
+    assert(ctfe { class A(a:Int)(b:Int){def f = a+b}; new A(40)(2).f } == 42)
   }
 
 }

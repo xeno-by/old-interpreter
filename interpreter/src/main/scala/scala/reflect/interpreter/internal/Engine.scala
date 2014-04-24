@@ -486,55 +486,45 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
 
   class ObjectValue(sym: Symbol, body: List[Tree]) extends Value {
     var initialized = false
-    class ObjectCons(parent: Value, sym: MethodSymbol, capturedEnv: Env) extends MethodValue(sym, capturedEnv) {
-      def extractConsArgs(tree: MemberDef, args: List[ValDef]): List[Symbol] = {
+    class ObjectCons(parent: ObjectValue, sym: MethodSymbol, capturedEnv: Env) extends MethodValue(sym, capturedEnv) {
+      def extractConsArgs(tree: MemberDef, args: List[List[ValDef]]): List[List[Symbol]] = {
         // workaround constructor args symbol resolution bug
         // extract symbols from valdefs of class body by name
         // FIXME: there seems to be another bug, this time with names: an extra whitespace is appended to name in valdef symbol
         val valDefs = tree.children.head.asInstanceOf[Template].body.collect({case d: ValDef => d}).map(it=>(it.name.toString.trim, it)).toMap
-        args.map(it => valDefs(it.name.toString).symbol)
+        args.map(params => params.map(it => valDefs(it.name.toString).symbol))
       }
       override def apply(args: List[Value], env: Env): (Value, Env) = {
         val (paramss, earlydefns, stats:List[Tree], parents) = source(sym.owner) match {
           case q"$_ class $_[..$_] $_(...$paramss) extends { ..$earlydefns } with ..$parents { $_ => ..$stats }" =>
             (paramss, earlydefns, stats, parents)
         }
-        val valDefs = extractConsArgs(source(sym.owner), paramss.flatten.asInstanceOf[List[ValDef]])
-        val (_, env1) = super.apply(args, env.extend(parent, valDefs.zip(args).toMap))
-        val (res: List[Value], env2) = eval(stats, env1)
-        val env3 = env2.extend(parent, stats.map(_.symbol).zip(res).toMap)
-        (parent, env.extendHeap(env3))
+        // map constructor args to object field symbols
+        val valDefs = extractConsArgs(source(sym.owner), paramss.asInstanceOf[List[List[ValDef]]])
+        val src = source(sym).asInstanceOf[DefDef].rhs
+        new ObjectConsFun(valDefs, src, capturedEnv, stats, parent).apply(args, env)
       }
     }
-    def collectFields(parents: List[Symbol], env: Env): (Map[Symbol, Value], Env) = {
-      parents match {
-        case x::xs =>
-          // java classes have no obtainable source
-          if (x.isJava) (Map(), env)
-          else {
-            // assuming result of baseClasses is correctly linearized
-            val (res1, env1) = collectFields(xs, env)
-            val body: List[Tree] = source(x) match {
-              case cd: ClassDef   => cd.children.head.asInstanceOf[Template].body
-              case md: ModuleDef  => md.children.head.asInstanceOf[Template].body
-              case other          => IllegalState(other)
-            }
-            val (res2: List[Value], env2) = eval(body, env1)
-            (body.map(_.symbol).zip(res2).toMap ++ res1, env2)
-          }
-        case _     => (Map(), env)
-      }
-    }
-    override def init(env: Env): (Value, Env) = {
-      if (initialized) {
-        (this, env)
-      } else {
-        initialized = true
-        val (inherited, env1) = collectFields(sym.typeSignature.baseClasses.filter(!_.isModuleClass),
-          sym.typeSignature.baseClasses.foldLeft(env)((tmpEnv, s) => tmpEnv.extend(s, this)))
-        val (res: List[Value], env2) = eval(body, env1.extend(sym, this))
-        val env3 = env.extendHeap(env2).extend(this, Object(inherited ++ body.map(_.symbol).zip(res).toMap))
-        (this, env3)
+    class ObjectConsFun(paramss: List[List[Symbol]], body: Tree, capturedEnv: Env, stats: List[Tree], parent: ObjectValue)
+      extends FunctionValue(paramss, body, capturedEnv) {
+      override def apply(args: List[Value], callSiteEnv: Env): (Value, Env) = {
+        // FIXME: deduplicate this using FunctionValue(note the differences: args->fields, body->body+stats, expr->parent)
+        val env1 = callSiteEnv.pushFrame(capturedEnv)
+        paramss match {
+          case x :: Nil => // single parameter list - invoke
+            val (_, env2) = eval(body, env1.extend(parent, x.zip(args).toMap))
+            val (res1, env3) = eval(stats, env2)
+            val env4 = env3.extend(parent, stats.map(_.symbol).zip(res1).toMap)
+            (parent, callSiteEnv.extendHeap(env4))
+          case x :: xs => // multi parameter list - return curried function with N-1 parameter list
+            val env2 = env1.extend(parent, x.zip(args).toMap)
+            (new ObjectConsFun(xs, body, env2, stats, parent), callSiteEnv.extendHeap(env2))
+          case _ =>      // empty paramlist - invoke without extending env
+            val (_, env2) = eval(body, env1)
+            val (res1, env3) = eval(stats, env2)
+            val env4 = env3.extend(parent, stats.map(_.symbol).zip(res1).toMap)
+            (parent, callSiteEnv.extendHeap(env4))
+        }
       }
     }
     def selectOverride(member: Symbol, env: Env, _super: Boolean): Result = {
@@ -546,6 +536,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         sym.typeSignature.member(member.name)
       env.heap.get(this) match {
         case Some(Object(fields)) => (fields.getOrElse(mem, MethodValue(mem.asMethod, env)), env)
+        case Some(_: Primitive)   => IllegalState(this, "an object couldn't be a primitive")
         case _ => IllegalState(this)
       }
     }
@@ -571,8 +562,39 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
 
   case class ModuleValue(mod: ModuleSymbol, body: List[Tree]) extends ObjectValue(mod, body) {
     override def select(member: Symbol, env: Env, _super: Boolean = false): (Value, Env) = {
-      val (_, env1) = super.init(env)
+      val (_, env1) = init(env)
       super.select(member, env.extendHeap(env1))
+    }
+    def collectFields(parents: List[Symbol], env: Env): (Map[Symbol, Value], Env) = {
+      parents match {
+        case x::xs =>
+          // java classes have no obtainable source
+          if (x.isJava) (Map(), env)
+          else {
+            // assuming result of baseClasses is correctly linearized
+            val (res1, env1) = collectFields(xs, env)
+            val body: List[Tree] = source(x) match {
+              case cd: ClassDef   => cd.children.head.asInstanceOf[Template].body
+              case md: ModuleDef  => md.children.head.asInstanceOf[Template].body
+              case other          => IllegalState(other)
+            }
+            val (res2: List[Value], env2) = eval(body, env1)
+            (body.map(_.symbol).zip(res2).toMap ++ res1, env2)
+          }
+        case _     => (Map(), env)
+      }
+    }
+    override def init(env: Env): (Value, Env) = {
+      if (initialized) {
+        (this, env)
+      } else {
+        initialized = true
+        val (inherited, env1) = collectFields(mod.typeSignature.baseClasses.filter(!_.isModuleClass),
+          mod.typeSignature.baseClasses.foldLeft(env)((tmpEnv, s) => tmpEnv.extend(s, this)))
+        val (res: List[Value], env2) = eval(body, env1.extend(mod, this))
+        val env3 = env.extendHeap(env2).extend(this, Object(inherited ++ body.map(_.symbol).zip(res).toMap))
+        (this, env3)
+      }
     }
     override def toString = s"ModuleValue#" + id
   }
