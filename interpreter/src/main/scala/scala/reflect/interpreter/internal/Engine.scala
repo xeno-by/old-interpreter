@@ -50,7 +50,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     case q"while ($cond) $body"               => evalWhile(cond, body, env)
     case q"do $body while ($cond)"            => evalDoWhile(cond, body, env)
     case s: Super                             => eval(s.qual, env)
-    case q"{ ..$stats }"                      => evalBlock(stats, env)
+    case q"{ ..$stats }"                      => evalBlock(tree.children, env) // FIXME: qq bug workaround(lazy value wrapper functions skipped in stats)
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
     // case q"new { ..$early } with ..$parents { $self => ..$stats }" => never going to happen in general case, desugared into selects/applications of New

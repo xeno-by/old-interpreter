@@ -26,4 +26,7 @@ class ValueSuite extends FunSuite {
     assert(ctfe { val a = 42; var b = a; b = 100; a } == 42)
   }
 
+  test("lazy value") {
+    assert(ctfe { lazy val a = 42; a} == 42)
+  }
 }
