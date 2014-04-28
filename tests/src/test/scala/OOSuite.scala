@@ -50,6 +50,14 @@ class OOSuite extends FunSuite {
     } == 42)
   }
 
+  test("overloaded select") {
+    assert(ctfe {
+      class A{ def f = 100; def f(a: Int) = a + 100}
+      class B extends A{ def f = 999; def f(a: Int) = a}
+      (new B).f(42)
+    } == 42)
+  }
+
   test("polymorphic val") {
     assert(ctfe {
       class A { val v = 99}

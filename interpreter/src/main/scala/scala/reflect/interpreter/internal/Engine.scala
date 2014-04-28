@@ -532,7 +532,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       val mem = if (static)
         member
       else
-        sym.typeSignature.member(member.name)
+        sym.typeSignature.member(member.name).alternatives.find(alt => alt.typeSignature == member.typeSignature).get
       env.heap.get(this) match {
         case Some(Object(fields)) => (fields.getOrElse(mem, MethodValue(mem.asMethod, env)), env)
         case Some(_: Primitive)   => IllegalState(this, "an object couldn't be a primitive")
