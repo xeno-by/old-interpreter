@@ -496,7 +496,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
             (paramss, earlydefns, stats, parents)
         }
         // map constructor argss to object field symbols
-        val valDefs = extractConsArgs(source(sym.owner), paramss.asInstanceOf[List[List[ValDef]]])
+        val valDefs = extractConsArgs(source(sym.owner), paramss)
         val src = source(sym).asInstanceOf[DefDef].rhs
         new ObjectCtorFun(valDefs, src, capturedEnv, stats, parent).apply(args, env)
       }
