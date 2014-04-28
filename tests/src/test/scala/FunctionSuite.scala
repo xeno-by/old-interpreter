@@ -57,8 +57,12 @@ class FunctionSuite extends FunSuite{
     } == 42)
   }
 
-  test("zero paremeter list") {
+  test("zero parameter list") {
     assert(ctfe { def f = 42; f } == 42)
+  }
+
+  test("zero parameter list eval on lookup") {
+    assert(ctfe { def f = 40; val v = f; v+2 } == 42)
   }
 
 }

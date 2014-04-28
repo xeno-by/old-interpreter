@@ -308,9 +308,6 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
 
   case class Env(stack: FrameStack, heap: Heap) {
     def lookup(sym: Symbol): Result = {
-      // TODO: handle lazy val init
-      // TODO: handle module init
-      // TODO: evaluate nullary methods
       // all the stuff above might be effectful
       // therefore we return Result here, and not just Value
       val mod = if (sym.isModule) sym.asModule else if (sym.isClass && sym.isModuleClass) sym.asClass.module else sym
@@ -321,7 +318,13 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
             case None        => Value.module(m, this)
           }
           mod.init(env1)
-        case _                                   => (stack.head(sym), this)
+        case _                                   =>
+          stack.head.get(sym) match {
+            case Some(f: FunctionValue) if f.paramss.isEmpty        => f.apply(Nil, this)
+            case Some(f: MethodValue)   if f.sym.paramLists.isEmpty => f.apply(Nil, this)
+            case Some(other)                                        => (other, this)
+            case None                                               => IllegalState(sym)
+          }
       }
     }
     def extend(sym: Symbol, value: Value): Env = {
@@ -434,10 +437,6 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   sealed trait CallableValue extends Value {
-    override def reify(env: Env): (Any, Env) = {
-      val (res, env1) = apply(List(), env)
-      res.reify(env1)
-    }
   }
 
   case class EmulatedCallableValue(f: (List[Value], Env) => Result) extends CallableValue {
