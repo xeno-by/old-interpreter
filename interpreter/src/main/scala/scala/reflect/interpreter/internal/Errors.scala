@@ -17,7 +17,7 @@ trait Errors {
 
   def UnreifiableResult(value: Value) = sys.error(s"can't reify evaluation result $value")
 
-  def UninitializedObject(value: Value) = sys.error(s"can't access field of an uninitialized ojbect $value")
+  def UninitializedObject(value: Value) = sys.error(s"can't access field of an uninitialized object $value")
 
   def RuntimeReflectionNotSupported(tree: Tree) = sys.error(s"runtime reflection is not supported: $tree")
 
