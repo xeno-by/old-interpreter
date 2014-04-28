@@ -45,4 +45,9 @@ class ModuleSuite extends FunSuite{
   test("object transitive immutability") {
     assert(ctfe { object A { var a = 42}; var v = A.a; v = 100; A.a } == 42)
   }
+
+  test("module forward reference") {
+    assert(ctfe { object A {def f = 42}; object B {def g = A.f}; B.g} == 42)
+  }
+
 }

@@ -313,17 +313,21 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // TODO: evaluate nullary methods
       // all the stuff above might be effectful
       // therefore we return Result here, and not just Value
-      sym match {
-        case m: ModuleSymbol                     => stack.head(sym).init(this)
-        case mc: ClassSymbol if mc.isModuleClass => stack.head(mc.module).init(this)
+      val mod = if (sym.isModule) sym.asModule else if (sym.isClass && sym.isModuleClass) sym.asClass.module else sym
+      mod match {
+        case m: ModuleSymbol                     =>
+          val (mod, env1) = stack.head.get(sym) match {
+            case Some(value) => (value, this)
+            case None        => Value.module(m, this)
+          }
+          mod.init(env1)
         case _                                   => (stack.head(sym), this)
       }
     }
     def extend(sym: Symbol, value: Value): Env = {
       stack.head.get(sym) match {
         case Some(v: ReifiableValue) => Env(stack, heap + (v -> heap(value)))
-        case Some(v: Value)          => Env(stack, heap) // TODO: what do with unreifiable values
-        case None           => Env((stack.head + (sym -> value)) :: stack.tail, heap)
+        case _           => Env((stack.head + (sym -> value)) :: stack.tail, heap)
       }
     }
     def extend(obj: Value, field: Symbol, value: Value): Env = {
@@ -555,12 +559,11 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
     override def toString = s"ObjectValue#" + id
   }
-
-  case class ModuleValue(mod: ModuleSymbol) extends ObjectValue(mod, mod.typeSignature) {
-    var initialized = false
+  
+  class UninitializedModuleValue(mod: ModuleSymbol) extends ObjectValue(mod, mod.typeSignature) {
     override def select(member: Symbol, env: Env, static: Boolean = false): (Value, Env) = {
-      val (_, env1) = init(env)
-      super.select(member, env.extendHeap(env1))
+      val (res, env1) = init(env)
+      res.select(member, env.extend(mod, res).extendHeap(env1))
     }
     def collectFields(parents: List[Symbol], env: Env): (ListMap[Symbol, Value], Env) = {
       parents match {
@@ -582,17 +585,18 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       }
     }
     override def init(env: Env): (Value, Env) = {
-      if (initialized) {
-        (this, env)
-      } else {
-        initialized = true
-        val (inherited, env1) = collectFields(mod.typeSignature.baseClasses.filter(!_.isModuleClass),
-          mod.typeSignature.baseClasses.foldLeft(env)((tmpEnv, s) => tmpEnv.extend(s, this)))
-        val (res: List[Value], env2) = eval(body, env1.extend(mod, this))
-        val env3 = env.extendHeap(env2).extend(this, Object(inherited ++ body.map(_.symbol).zip(res)))
-        (this, env3)
-      }
+      val v = new ModuleValue(mod)
+      val (inherited, env1) = collectFields(mod.typeSignature.baseClasses.filter(!_.isModuleClass),
+        mod.typeSignature.baseClasses.foldLeft(env)((tmpEnv, s) => tmpEnv.extend(s, v)).extend(mod, v))
+      val (res: List[Value], env2) = eval(body, env1.extend(mod, v))
+      val env3 = env.extendHeap(env2).extend(v, Object(inherited ++ body.map(_.symbol).zip(res))).extend(mod, v)
+      (v, env3)
     }
+    override def toString = s"UninitializedModuleValue#" + id
+  }
+
+  class ModuleValue(mod: ModuleSymbol) extends ObjectValue(mod, mod.typeSignature) {
+    override def init(env: Env): Result = (this, env)
     override def toString = s"ModuleValue#" + id
   }
 
@@ -617,7 +621,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
     def module(mod: ModuleSymbol, env: Env): Result = {
       // TODO: create an interpreter value that corresponds to the object represented by the symbol
-      val value = ModuleValue(mod)
+      val value = new UninitializedModuleValue(mod)
       (value, env.extend(mod, value))
     }
     def method(meth: MethodSymbol, env: Env): Result = {
