@@ -54,8 +54,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
     // case q"new { ..$early } with ..$parents { $self => ..$stats }" => never going to happen in general case, desugared into selects/applications of New
-    case _: ValDef | _: DefDef                => evalLocal(tree, env) // can't skip these trees, because we need to enter them in scope when interpreting
-    case _: ModuleDef                         => evalModuleDef(tree, env)
+    case _: ValDef | _: DefDef | _: ModuleDef => evalLocal(tree, env) // can't skip these trees, because we need to enter them in scope when interpreting
     case _: MemberDef                         => eval(q"()", env) // skip these trees, because we have sym.source
     case _: Import                            => eval(q"()", env) // skip these trees, because it's irrelevant after typer, which has resolved all imports
     case _                                    => UnrecognizedAst(tree)
@@ -122,13 +121,11 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         res.copy(env1)
       case tree: DefDef =>
         Value.method(tree.symbol.asMethod, env)
+      case tree: ModuleDef =>
+        Value.module(tree.symbol.asModule, env)
     }
     val env2 = env.extendHeap(env1).extend(tree.symbol, vrepr)
     (vrepr, env2)
-  }
-
-  def evalModuleDef(tree: Tree, env: Env): Result = {
-    Value.module(tree.symbol.asModule, env)
   }
 
   def evalClassDef(tree: Tree, env: Env): Result = {
