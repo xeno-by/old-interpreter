@@ -128,7 +128,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   def evalModuleDef(tree: Tree, env: Env): Result = {
-    Value.module(tree.symbol.asModule, tree.children.head.asInstanceOf[Template].body, env)
+    Value.module(tree.symbol.asModule, env)
   }
 
   def evalClassDef(tree: Tree, env: Env): Result = {
@@ -483,7 +483,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     override def toString = s"DummyMethodValue#" + id
   }
 
-  class ObjectValue(sym: Symbol, body: List[Tree]) extends Value {
+  class ObjectValue(sym: Symbol, tpe: Type) extends Value {
+    val body = source(sym).children.head.asInstanceOf[Template].body
     class ObjectCtor(parent: ObjectValue, sym: MethodSymbol, capturedEnv: Env) extends MethodValue(sym, capturedEnv) {
       def extractConsArgs(tree: MemberDef, argss: List[List[ValDef]]): List[List[Symbol]] = {
         // workaround constructor argss symbol resolution bug
@@ -558,7 +559,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     override def toString = s"ObjectValue#" + id
   }
 
-  case class ModuleValue(mod: ModuleSymbol, body: List[Tree]) extends ObjectValue(mod, body) {
+  case class ModuleValue(mod: ModuleSymbol) extends ObjectValue(mod, mod.typeSignature) {
     var initialized = false
     override def select(member: Symbol, env: Env, static: Boolean = false): (Value, Env) = {
       val (_, env1) = init(env)
@@ -614,12 +615,12 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     def instantiate(tpe: Type, env: Env): Result = {
       // TODO: instantiate a type (can't use ClassSymbol instead of Type, because we need to support polymorphic arrays)
       // not sure whether we need env, because we don't actually call the constructor here, but let's have it just in case
-      val v = new ObjectValue(tpe.typeSymbol, source(tpe.typeSymbol).children.head.asInstanceOf[Template].body)
+      val v = new ObjectValue(tpe.typeSymbol, tpe)
       (v, env.extend(v, new Object(ListMap())))
     }
-    def module(mod: ModuleSymbol, children: List[Tree], env: Env): Result = {
+    def module(mod: ModuleSymbol, env: Env): Result = {
       // TODO: create an interpreter value that corresponds to the object represented by the symbol
-      val value = ModuleValue(mod, children)
+      val value = ModuleValue(mod)
       (value, env.extend(mod, value))
     }
     def method(meth: MethodSymbol, env: Env): Result = {
