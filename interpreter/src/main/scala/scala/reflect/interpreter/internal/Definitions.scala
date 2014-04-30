@@ -9,7 +9,9 @@ trait Definitions {
 
   lazy val Any_isInstanceOf = AnyClass.info.decl(TermName("isInstanceOf"))
   lazy val Any_equals = AnyClass.info.decl(TermName("equals"))
+  lazy val Any_hashCode = AnyClass.info.decl(TermName("hashCode"))
   lazy val Object_eq = ObjectClass.info.decl(TermName("eq"))
+  lazy val Object_hashcode = ObjectClass.info.decl(TermName("hashCode"))
   lazy val Option_isDefined = OptionClass.info.decl(TermName("isDefined"))
   lazy val Option_get = OptionClass.info.decl(TermName("get"))
 

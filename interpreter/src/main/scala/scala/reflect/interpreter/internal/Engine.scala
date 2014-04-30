@@ -371,7 +371,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   @volatile private var _nextId = new java.util.concurrent.atomic.AtomicInteger()
   private def nextId() = _nextId.incrementAndGet()
 
-  sealed trait Value {
+  sealed trait Value extends MagicMethodEmulator{
     val id = nextId()
     def reify(env: Env): JvmResult = {
       // convert this interpreter value to a JVM value
@@ -381,7 +381,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // TODO: throw an exception when trying to reify an object
       env.heap.get(this) match {
         case Some(Primitive(prim)) => (prim, env)
-        case Some(_)               => UnreifiableResult(this)
+        case Some(Object(fields))  => (fields, env)
         case None                  => IllegalState(this)
       }
     }
@@ -393,8 +393,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // because e.g. foo.bar(1, 2) looks like Apply(Select(foo, bar), List(1, 2))
       // TODO: same todos as for Env.lookup
       // TODO: implement all Any methods such as hashCode/etc here
-
-      ???
+      (selectCallable(this, member, env), env)
     }
     def apply(args: List[Value], env: Env): Result = {
       // TODO: needs to work well both with functions and method references
@@ -422,14 +421,12 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
     def copy(env: Env): Result = (this, env)
     def init(env: Env): Result = (this, env)
+//    def hashCode()
   }
 
   trait ReifiableValue
 
-  class JvmValue() extends Value with ReifiableValue with MagicMethodEmulator {
-    override def select(member: Symbol, env: Env, static: Boolean = false): Result = {
-      (selectCallable(this, member, env), env)
-    }
+  class JvmValue() extends Value with ReifiableValue {
     override def copy(env: Env) = {
       val v = new JvmValue()
       val (res, env1) = reify(env)
@@ -546,7 +543,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       val env1 = sym.typeSignature.baseClasses.foldLeft(env)((tmpEnv, parent) => tmpEnv.extend(parent, this))
       env1.heap.get(this) match {
         // FIXME: we should emulate java.Object methods somehow
-        case _ if member.isJava   => (DummyMethodValue(member.asMethod), env)
+        case _ if member.isJava && member.isConstructor  => (DummyMethodValue(member.asMethod), env)
+        case _ if member.isJava                          => super.select(member, env, static)
         case _ if member.isConstructor =>
           (new ObjectCtor(this, member.asMethod, env1.extend(sym, this)), env)
         case _ if member.isMethod => selectMethod(member, env1, static)

@@ -20,6 +20,11 @@ trait Emulators {
           val jresult = f(jvalue.asInstanceOf[T1], jarg.asInstanceOf[T2])
           Value.reflect(jresult, env2)
         }
+        def unaryOp[T1](f: (T1) => Any): Result = {
+          val (jvalue, env1) = value.reify(env)
+          val jresult = f(jvalue.asInstanceOf[T1])
+          Value.reflect(jresult, env1)
+        }
         sym match {
           case INT_PLUS_INT     => binOp[Int, Int](_ + _)
           case INT_MINUS_INT    => binOp[Int, Int](_ - _)
@@ -28,6 +33,9 @@ trait Emulators {
           case INT_EQEQ_INT     => binOp[Int, Int](_ == _)
           case INT_PLUS_FLOAT   => binOp[Int, Float](_ + _)
           case Any_equals       => binOp[Any, Any](_.equals(_))
+          case Any_isInstanceOf => binOp[Any, Type](_.getClass == _.getClass)
+          case Any_hashCode     => unaryOp[Any](_.hashCode())
+          case Object_hashcode  => unaryOp[java.lang.Object](java.util.Objects.hashCode(_))
           case other            => UnsupportedEmulation(sym)
         }
       })
