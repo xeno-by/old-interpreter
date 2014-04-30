@@ -27,6 +27,7 @@ trait Emulators {
           case INT_GT_INT       => binOp[Int, Int](_ > _)
           case INT_EQEQ_INT     => binOp[Int, Int](_ == _)
           case INT_PLUS_FLOAT   => binOp[Int, Float](_ + _)
+          case Any_equals       => binOp[Any, Any](_.equals(_))
           case other            => UnsupportedEmulation(sym)
         }
       })

@@ -14,10 +14,10 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // which is why we can't test the interpreter on the output of reify
     // TODO: in Palladium this will become irrelevant, because all trees
     // are going to have a `Tree.tpe` method that will actually typecheck stuff if necessary
-    tree.foreach(sub => {
-      if (sub.tpe == null) UnattributedAst(sub)
-      if (sub.symbol == NoSymbol) UnattributedAst(sub)
-    })
+//    tree.foreach(sub => {
+//      if (sub.tpe == null) UnattributedAst(sub)
+//      if (sub.symbol == NoSymbol) UnattributedAst(sub)
+//    })
     val initialEnv = Env(List(ListMap()), ListMap())
     val (value, finalEnv) = eval(tree, initialEnv)
     val (result, _) = value.reify(finalEnv)
@@ -287,7 +287,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     def loop(vscrut: Value, cases: List[CaseDef], env: Env): Result = cases match {
       case CaseDef(pat, guard, body) :: rest =>
         val (vpat, env1) = evalPattern(vscrut, pat, env, env)
-        val (vguard, env2) = eval(guard.orElse(q"true"), env1)
+        val (vguard, env2) = vpat.branch(envb => eval(guard.orElse(q"true"), envb),
+                                         envb => eval(q"false", envb), env1)
         vguard.branch(env3 => eval(body, env3), env3 => loop(vscrut, rest, env3), env2)
       case _ =>
         val (exn, env1) = Value.instantiate(typeOf[MatchError], env)
@@ -295,7 +296,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         ??? // TODO: throw exn1 in env2
     }
     val (vscrut, env1) = eval(scrut, env)
-    loop(vscrut, cases, env1)
+    loop(vscrut, cases, env1.extend(NoSymbol, vscrut)) // pass vscrut as "_" by NoSymbol(_ has none)
   }
 
   // can't make these classes final because of SI-4440
@@ -330,7 +331,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     def extend(sym: Symbol, value: Value): Env = {
       stack.head.get(sym) match {
         case Some(v: ReifiableValue) => Env(stack, heap + (v -> heap(value)))
-        case _           => Env((stack.head + (sym -> value)) :: stack.tail, heap)
+        case _                       => Env((stack.head + (sym -> value)) :: stack.tail, heap)
       }
     }
     def extend(obj: Value, field: Symbol, value: Value): Env = {
@@ -392,6 +393,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // because e.g. foo.bar(1, 2) looks like Apply(Select(foo, bar), List(1, 2))
       // TODO: same todos as for Env.lookup
       // TODO: implement all Any methods such as hashCode/etc here
+
       ???
     }
     def apply(args: List[Value], env: Env): Result = {
