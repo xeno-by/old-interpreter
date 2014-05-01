@@ -25,6 +25,7 @@ trait Emulators {
           val jresult = f(jvalue.asInstanceOf[T1])
           Value.reflect(jresult, env1)
         }
+        def dummyOp = Value.reflect((), env)
         sym match {
           case INT_PLUS_INT     => binOp[Int, Int](_ + _)
           case INT_MINUS_INT    => binOp[Int, Int](_ - _)
@@ -36,6 +37,7 @@ trait Emulators {
           case Any_isInstanceOf => binOp[Any, Type](_.getClass == _.getClass)
           case Any_hashCode     => unaryOp[Any](_.hashCode())
           case Object_hashcode  => unaryOp[java.lang.Object](java.util.Objects.hashCode(_))
+          case Object_init      => dummyOp
           case other            => UnsupportedEmulation(sym)
         }
       })

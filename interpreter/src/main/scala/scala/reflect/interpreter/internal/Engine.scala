@@ -33,8 +33,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     case q"$qual.$_"                          => evalSelect(qual, tree.symbol, env)
 //    case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
     case q"$_.this"                           => env.lookup(tree.symbol)
-    case q"$expr.isInstanceOf[$tpt]()"        => evalTypeTest(expr, tpt.tpe, env)
-    case q"$expr.asInstanceOf[$tpt]()"        => evalTypeCast(expr, tpt.tpe, env)
+    case q"$expr.isInstanceOf[$tpt]"          => evalTypeTest(expr, tpt.tpe, env)
+    case q"$expr.asInstanceOf[$tpt]"          => evalTypeCast(expr, tpt.tpe, env)
     case Apply(expr, args)                    => evalApply(expr, args, env) // the q"$expr[..$targs](...$argss)" quasiquote is too high-level for this
     case TypeApply(expr, targs)               => eval(expr, env)
     case q"$lhs = $rhs"                       => evalAssign(lhs, rhs, env)
@@ -50,7 +50,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     case q"while ($cond) $body"               => evalWhile(cond, body, env)
     case q"do $body while ($cond)"            => evalDoWhile(cond, body, env)
     case s: Super                             => eval(s.qual, env)
-    case _: Block                             => evalBlock(tree.children, env) // FIXME: qq bug workaround(lazy value wrapper functions skipped in stats)
+    case _: Block                             => evalBlock(tree.children, env) // qq feature workaround(lazy value wrapper functions skipped in stats)
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
     // case q"new { ..$early } with ..$parents { $self => ..$stats }" => never going to happen in general case, desugared into selects/applications of New
@@ -76,19 +76,19 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // we only support literal types that we are interested in
     // sure we could say `case Literal(Constant(x)) => reflect(x)`
     // but that would make evaluation less safe
-    def reflect(jvmValue: Any) = Value.reflect(jvmValue, env)
+//    def reflect[T](jvmValue: T) = Value.reflect(jvmValue, env)
     tree match {
-      case q"${x: Byte}"                  => reflect(x)
-      case q"${x: Short}"                 => reflect(x)
-      case q"${x: Char}"                  => reflect(x)
-      case q"${x: Int}"                   => reflect(x)
-      case q"${x: Long}"                  => reflect(x)
-      case q"${x: Float}"                 => reflect(x)
-      case q"${x: Double}"                => reflect(x)
-      case q"${x: Boolean}"               => reflect(x)
-      case q"${x: Unit}"                  => reflect(x)
-      case q"${x: String}"                => reflect(x)
-      case q"null"                        => reflect(null)
+      case q"${x: Byte}"                  => Value.reflect(x, env)
+      case q"${x: Short}"                 => Value.reflect(x, env)
+      case q"${x: Char}"                  => Value.reflect(x, env)
+      case q"${x: Int}"                   => Value.reflect(x, env)
+      case q"${x: Long}"                  => Value.reflect(x, env)
+      case q"${x: Float}"                 => Value.reflect(x, env)
+      case q"${x: Double}"                => Value.reflect(x, env)
+      case q"${x: Boolean}"               => Value.reflect(x, env)
+      case q"${x: Unit}"                  => Value.reflect(x, env)
+      case q"${x: String}"                => Value.reflect(x, env)
+      case q"null"                        => Value.reflect(null, env)
       case Literal(Constant(tpe: Type))   => RuntimeReflectionNotSupported(tree) // this tree shape stands for `classOf[$tpe]` after typechecking
       case Literal(Constant(sym: Symbol)) => UnrecognizedAst(tree) // this is a very obscure tree shape only used in annotations, and we don't eval those
       case _                              => UnrecognizedAst(tree)
@@ -242,7 +242,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         case Ident(termNames.WILDCARD) =>
           succeed(menv, renv)
         case Typed(_, tpt) =>
-          checkCond(q"$vscrut.${Any_isInstanceOf}[$tpt]()")
+          checkCond(q"$vscrut.${Any_isInstanceOf}[$tpt]")
         case Bind(name, pat) =>
           checkPat(pat, onSuccess = (menv1, renv1) => succeed(menv1, renv1.extend(pat.symbol, vscrut)))
         case pat: Literal =>
@@ -259,7 +259,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
             val renv1 = renv.extendHeap(matchEnv2)
             evalPatterns(vfields, pats, matchEnv2, renv1)
           }
-          checkCond(q"$vscrut.${Any_isInstanceOf}[$tpt]()", onSuccess = cont)
+          checkCond(q"$vscrut.${Any_isInstanceOf}[$tpt]", onSuccess = cont)
         case UnApply(Apply(unapply, List(dummy)), Nil) => // this is what other extractors are translated to
           checkCond(q"$unapply($vscrut)")
         case UnApply(Apply(unapply, List(dummy)), pats) =>
@@ -330,8 +330,9 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
     def extend(sym: Symbol, value: Value): Env = {
       stack.head.get(sym) match {
-        case Some(v: ReifiableValue) => Env(stack, heap + (v -> heap(value)))
-        case _                       => Env((stack.head + (sym -> value)) :: stack.tail, heap)
+        case Some(v: Value) if sym == NoSymbol => Env((stack.head + (sym -> value)) :: stack.tail, heap) // "_" reassigning workaround
+        case Some(v: ReifiableValue)           => Env(stack, heap + (v -> heap(value)))
+        case _                                 => Env((stack.head + (sym -> value)) :: stack.tail, heap)
       }
     }
     def extend(obj: Value, field: Symbol, value: Value): Env = {
@@ -371,7 +372,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   @volatile private var _nextId = new java.util.concurrent.atomic.AtomicInteger()
   private def nextId() = _nextId.incrementAndGet()
 
-  sealed trait Value extends MagicMethodEmulator{
+  sealed trait Value extends MagicMethodEmulator {
     val id = nextId()
     def reify(env: Env): JvmResult = {
       // convert this interpreter value to a JVM value
@@ -411,8 +412,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       }
     }
     def typeTest(tpe: Type, env: Env): Result = {
-      // TODO: can't use a symbol here, because this can be an array. use tpe.erasure if in doubt
-      ???
+      // can't use a symbol here, because this can be an array. use tpe.erasure if in doubt
+      if (tpt <:< tpe) Value.reflect(true, env) else Value.reflect(false, env)
     }
     def typeCast(tpe: Type, env: Env): Result = {
       // TODO: can't be a no-op, because we actually need to throw if the type is incompatible
@@ -421,14 +422,16 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
     def copy(env: Env): Result = (this, env)
     def init(env: Env): Result = (this, env)
-//    def hashCode()
+    val tpt: Type = typeOf[Any]
   }
+
+  class TypedValue(override val tpt: Type) extends Value
 
   trait ReifiableValue
 
-  class JvmValue() extends Value with ReifiableValue {
+  class JvmValue(tpt: Type) extends TypedValue(tpt) with ReifiableValue {
     override def copy(env: Env) = {
-      val v = new JvmValue()
+      val v = new JvmValue(tpt)
       val (res, env1) = reify(env)
       (v, env1.extend(v, res))
     }
@@ -474,15 +477,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     override def toString = s"MethodValue#" + id
   }
 
-  // a placeholder for java methods/methods with unobtainable source
-  case class DummyMethodValue(sym: MethodSymbol) extends CallableValue {
-    override def apply(args: List[Value], env: Env): (Value, Env) = {
-      Value.reflect((), env)
-    }
-    override def toString = s"DummyMethodValue#" + id
-  }
-
-  class ObjectValue(sym: Symbol, tpe: Type) extends Value {
+  class ObjectValue(sym: Symbol, tpe: Type) extends TypedValue(tpe) {
     val body = source(sym).children.head.asInstanceOf[Template].body
     class ObjectCtor(parent: ObjectValue, sym: MethodSymbol, capturedEnv: Env) extends MethodValue(sym, capturedEnv) {
       def extractConsArgs(tree: MemberDef, argss: List[List[ValDef]]): List[List[Symbol]] = {
@@ -542,18 +537,15 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // point all parent symbol references to this instance
       val env1 = sym.typeSignature.baseClasses.foldLeft(env)((tmpEnv, parent) => tmpEnv.extend(parent, this))
       env1.heap.get(this) match {
-        // FIXME: we should emulate java.Object methods somehow
-        case _ if member.isJava && member.isConstructor  => (DummyMethodValue(member.asMethod), env)
-        case _ if member.isJava                          => super.select(member, env, static)
-        case _ if member.isConstructor =>
-          (new ObjectCtor(this, member.asMethod, env1.extend(sym, this)), env)
-        case _ if member.isMethod => selectMethod(member, env1, static)
-        case Some(Object(fields)) =>
+        case _ if member.isJava        => super.select(member, env, static)
+        case _ if member.isConstructor => (new ObjectCtor(this, member.asMethod, env1.extend(sym, this)), env)
+        case _ if member.isMethod      => selectMethod(member, env1, static)
+        case Some(Object(fields))      =>
           fields.get(member) match {
-            case Some(value)             => (value, env)
-            case _                       => IllegalState(member, "no such field")
+            case Some(value)  => (value, env)
+            case _            => IllegalState(member, "no such field")
           }
-        case _                    => UninitializedObject(this)
+        case _                         => UninitializedObject(this)
       }
     }
     override def toString = s"ObjectValue#" + id
@@ -600,11 +592,11 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   object Value {
-    def reflect(any: Any, env: Env): Result = {
+    def reflect[T](any: T, env: Env)(implicit ev: TypeTag[T]): Result = {
       // wrap a JVM value in an interpreter value
       // strictly speaking, env is unnecessary here, because this shouldn't be effectful
       // but I'm still threading it though here, because who knows
-      val value = new JvmValue()
+      val value = new JvmValue(ev.tpe)
       (value, env.extend(value, any))
     }
     def function(params: List[Tree], body: Tree, env: Env): Result = {
