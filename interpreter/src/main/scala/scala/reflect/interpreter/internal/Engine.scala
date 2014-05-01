@@ -143,7 +143,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       case Select(qual, _) => // someone's field
         val (vlhs, env1) = eval(qual, env)
         val (vrhs, env2) = eval(rhs, env1)
-        Value.reflect((), env1.extend(vlhs, lhs.symbol, vrhs))
+        Value.reflect((), env1.extendHeap(env2).extend(vlhs, lhs.symbol, vrhs))
     }
   }
 
@@ -488,14 +488,18 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         argss.map(args => args.map(arg => valDefs(arg.name.toString).symbol))
       }
       override def apply(args: List[Value], env: Env): (Value, Env) = {
-        val (paramss, earlydefns, stats:List[Tree], parents) = source(sym.owner) match {
+        val classSource: MemberDef = source(sym.owner)
+        val (paramss, earlydefns, stats:List[Tree], parents) = classSource match {
           case q"$_ class $_[..$_] $_(...$paramss) extends { ..$earlydefns } with ..$parents { $_ => ..$stats }" =>
             (paramss, earlydefns, stats, parents)
         }
+        // process early defs before superclass constructor invocation
+        val (res, env1) = eval(earlydefns, env)
+        val env2 = env1.extend(parent, earlydefns.map(_.symbol).zip(res).toMap)
         // map constructor argss to object field symbols
-        val valDefs = extractConsArgs(source(sym.owner), paramss)
+        val valDefs = extractConsArgs(classSource, paramss)
         val src = source(sym).asInstanceOf[DefDef].rhs
-        new ObjectCtorFun(valDefs, src, capturedEnv, stats, parent).apply(args, env)
+        new ObjectCtorFun(valDefs, src, capturedEnv, stats, parent).apply(args, env2)
       }
     }
     class ObjectCtorFun(paramss: List[List[Symbol]], body: Tree, capturedEnv: Env, stats: List[Tree], parent: ObjectValue)

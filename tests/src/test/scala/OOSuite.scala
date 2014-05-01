@@ -87,4 +87,27 @@ class OOSuite extends FunSuite {
     assert(ctfe { class A(a:Int)(b:Int){def f = a+b}; new A(40)(2).f } == 42)
   }
 
+  test("anonymous class") {
+    assert(ctfe {
+      trait F {val x: Int}
+      val v = new F {val x = 42}
+      v.x
+    } == 42)
+  }
+
+  test("lazy field initialization") {
+    assert(ctfe {
+      abstract class A { val x: Int; val y = x}
+      class B extends A {lazy val x = 42}
+      (new B).y
+    } == 42)
+  }
+
+  test("anonymous class with") {
+    assert(ctfe {
+      trait F {val x: Int}
+      val v = new {val x = 42} with F
+      v.x
+    } == 42)
+  }
 }
