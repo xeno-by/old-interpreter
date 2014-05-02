@@ -60,17 +60,17 @@ class OOSuite extends FunSuite {
   }
 
   test("runtime polymorphism simple") {
-    assert(ctfe { class A{def f() = 100}; class B extends A{def f() = 42}; (new B).f() } == 42)
+    assert(ctfe { class A{def f() = 100}; class B extends A{override def f() = 42}; (new B).f() } == 42)
   }
 
   test("simple super call") {
-    assert(ctfe { class A{def f() = 100}; class B extends A{def f() = super.f()+42}; (new B).f() } == 142)
+    assert(ctfe { class A{def f() = 100}; class B extends A{override def f() = super.f()+42}; (new B).f() } == 142)
   }
 
   test("polymorphic method call") {
     assert(ctfe {
       class A { def f() = 100}
-      class B extends A { def f() = 42}
+      class B extends A { override def f() = 42}
       val b: A = new B
       b.f()
     } == 42)
@@ -79,7 +79,7 @@ class OOSuite extends FunSuite {
   test("overloaded select") {
     assert(ctfe {
       class A{ def f = 100; def f(a: Int) = a + 100}
-      class B extends A{ def f = 999; def f(a: Int) = a}
+      class B extends A{ override def f = 999; override def f(a: Int) = a}
       (new B).f(42)
     } == 42)
   }
@@ -87,7 +87,7 @@ class OOSuite extends FunSuite {
   test("polymorphic val") {
     assert(ctfe {
       class A { val v = 99}
-      class B extends A { val v = 42}
+      class B extends A { override val v = 42}
       val b: A = new B
       b.v
     } == 42)
