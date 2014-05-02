@@ -54,7 +54,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
     // case q"new { ..$early } with ..$parents { $self => ..$stats }" => never going to happen in general case, desugared into selects/applications of New
-    case _: ValDef | _: DefDef | _: ModuleDef => evalLocal(tree, env) // can't skip these trees, because we need to enter them in scope when interpreting
+    case _: ValDef | _: DefDef | _: ModuleDef => evalLocalDef(tree, env) // can't skip these trees, because we need to enter them in scope when interpreting
     case _: MemberDef                         => eval(q"()", env) // skip these trees, because we have sym.source
     case _: Import                            => eval(q"()", env) // skip these trees, because it's irrelevant after typer, which has resolved all imports
     case _                                    => UnrecognizedAst(tree)
@@ -112,18 +112,25 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       }
       Value.reflect(jvmValue, env)
     }
-    val (vrepr, env1) = tree match {
-      case ValDef(_, _, tpt, rhs) =>
+    tree match {
+      case ValDef(mods, fuck, tpt, rhs) =>
         // note how we bind ValDef's name to the default value of the corresponding type when evaluating the rhs
         // this is how Scala does it, so don't say that this looks weird :)
         val (vdefault, envx) = defaultValue(tpt.tpe)
-        val (res, env1) = eval(rhs, envx.extend(tree.symbol, vdefault))
+        val (res, env1) = if (!mods.hasFlag(Flag.LAZY))
+          eval(rhs, envx.extend(tree.symbol, vdefault))
+        else
+          (vdefault, envx)
         res.copy(env1)
       case tree: DefDef =>
         Value.method(tree.symbol.asMethod, env)
       case tree: ModuleDef =>
         Value.module(tree.symbol.asModule, env)
     }
+  }
+
+  def evalLocalDef(tree: Tree, env: Env): Result = {
+    val (vrepr, env1) = evalLocal(tree, env)
     val env2 = env.extendHeap(env1).extend(tree.symbol, vrepr)
     (vrepr, env2)
   }
@@ -504,14 +511,27 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
     class ObjectCtorFun(paramss: List[List[Symbol]], body: Tree, capturedEnv: Env, stats: List[Tree], parent: ObjectValue)
       extends FunctionValue(paramss, body, capturedEnv) {
+      def processFields(args: List[Tree], env: Env): Results = {
+        args match {
+          case arg :: tail =>
+            val (varg, env1) = evalLocal(arg, env)
+            val (vtail, env2) = processFields(tail, env1.extend(parent, arg.symbol, varg))
+            (varg :: vtail, env2)
+          case Nil =>
+            (Nil, env)
+        }
+      }
       override def apply(args: List[Value], callSiteEnv: Env): (Value, Env) = {
         // FIXME: deduplicate this using FunctionValue(note the differences: argss->fields, body->body+stats, expr->parent)
         val env1 = callSiteEnv.pushFrame(capturedEnv)
         paramss match {
           case x :: Nil => // single parameter list - invoke
             val (_, env2) = eval(body, env1.extend(parent, x.zip(args).toMap))
-            val (res1, env3) = eval(stats, env2)
-            val env4 = env3.extend(parent, stats.map(_.symbol).zip(res1).toMap)
+            // FIXME: since we can't extend object fields in eval() via evalLocal() this dirty hack is needed to
+            // manually evaluate and extend object fields based on filtered ValDefs from class body
+            val (defs, rest) = stats.partition(_.isInstanceOf[ValDef])
+            val (_, env3) = processFields(defs, env2)
+            val (_, env4) = eval(rest, env3)
             (parent, callSiteEnv.extendHeap(env4))
           case x :: xs => // multi parameter list - return curried function with N-1 parameter list
             val env2 = env1.extend(parent, x.zip(args).toMap)
