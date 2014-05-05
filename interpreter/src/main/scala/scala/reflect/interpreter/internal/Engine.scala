@@ -199,7 +199,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   def evalIf(cond: Tree, then1: Tree, else1: Tree, env: Env): Result = {
-    // TODO: handle reify side-effects in branches
+    // handle reify side-effects in branches
     val (vcond, env1) = eval(cond, env)
     vcond.branch(env2 => eval(then1, env2), env2 => eval(else1, env2), env1)
   }
@@ -350,7 +350,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       }
     }
     def extend(obj: Value, field: Symbol, value: Value): Env = {
-      // TODO: extend heap with the new value for the given field of the given object
+      // extend heap with the new value for the given field of the given object
       heap(obj) match {
         case Object(fields) => extend(obj, Object(fields + (field -> value)))
         case _              => IllegalState(obj)
@@ -393,7 +393,6 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // return None if it refers to a not-yet-compiled class
       // note that it is probably possible to improve reify to work correctly in all cases
       // however this doesn't matter much for Project Palladium, so that's really low priority
-      // TODO: throw an exception when trying to reify an object
       env.heap.get(this) match {
         case Some(Primitive(prim)) => (prim, env)
         case Some(Object(fields))  => (fields, env)
@@ -404,17 +403,15 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // note that we need env here, because selection might be effectful
       // also note that there's no need to evaluate empty-arglist methods here
       // if we have an empty-arglist application, then the result of select will be fed into apply(Nil)
-      // TODO: needs to handle selections of field and method references
+      // needs to handle selections of field and method references
       // because e.g. foo.bar(1, 2) looks like Apply(Select(foo, bar), List(1, 2))
-      // TODO: same todos as for Env.lookup
-      // TODO: implement all Any methods such as hashCode/etc here
       (selectCallable(this, member, env), env)
     }
     def apply(args: List[Value], env: Env): Result = {
-      // TODO: needs to work well both with functions and method references
-      // TODO: also has to handle partial applications
-      // TODO: when inside a method application, we should have enclosing this'es bound to corresponding class symbols
-      // TODO: in the current model, constructors have to return the object being constructed
+      // needs to work well both with functions and method references
+      // also has to handle partial applications
+      // when inside a method application, we should have enclosing this'es bound to corresponding class symbols
+      // in the current model, constructors have to return the object being constructed
       ???
     }
     def branch[T](then1: Env => T, else1: Env => T, env: Env): T = {
@@ -627,7 +624,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       (v, env.extend(v, new Object(ListMap())))
     }
     def module(mod: ModuleSymbol, env: Env): Result = {
-      // TODO: create an interpreter value that corresponds to the object represented by the symbol
+      // create an interpreter value that corresponds to the object represented by the symbol
       val value = new UninitializedModuleValue(mod)
       (value, env.extend(mod, value))
     }
