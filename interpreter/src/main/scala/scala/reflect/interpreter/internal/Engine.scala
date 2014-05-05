@@ -515,20 +515,34 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
     class ObjectCtorFun(paramss: List[List[Symbol]], body: Tree, capturedEnv: Env, stats: List[Tree], parent: ObjectValue)
       extends FunctionValue(paramss, body, capturedEnv) {
+      def initTrait(target: Symbol, env: Env): Result = {
+        val traitSrc: MemberDef = source(target)
+        val stats:List[Tree] = traitSrc match {
+          case q"$_ trait $name extends { ..$earlydefns } with ..$parents  { $_ => ..$stats }" => stats
+        }
+        val env1 = eval(stats, env)._2
+        (parent, env1)
+      }
+      def initTraits(env: Env): Result = {
+        val traits = sym.typeSignature.baseClasses.filter(_.asClass.isTrait).reverse
+        val env1 = traits.foldLeft(env)((newEnv, newTrait) => initTrait(newTrait, newEnv)._2)
+        (parent, env1)
+      }
       override def apply(args: List[Value], callSiteEnv: Env): (Value, Env) = {
         // FIXME: deduplicate this using FunctionValue(note the differences: argss->fields, body->body+stats, expr->parent)
         paramss match {
           case x :: Nil => // single parameter list - invoke
             val (_, env2) = eval(body, callSiteEnv.extend(parent, x.zip(args).toMap)) // body contains only super.ctor call
-            val (_, env3) = eval(stats, env2) // rest of ctor exprs goes into stats
-            (parent, callSiteEnv.extendHeap(env3))
+            val (_, env3) = initTraits(env2)  // trait initialization is not inlined in trees passed to us
+            val (_, env4) = eval(stats, env3) // rest of ctor exprs goes into stats
+            (parent, callSiteEnv.extendHeap(env4))
           case x :: xs => // multi parameter list - return curried function with N-1 parameter list
             val env2 = callSiteEnv.extend(parent, x.zip(args).toMap)
             (new ObjectCtorFun(xs, body, env2, stats, parent), callSiteEnv.extendHeap(env2))
           case Nil =>      // empty paramlist - invoke without extending env
             val (_, env2) = eval(body, callSiteEnv)
-            val (res1, env3) = eval(stats, env2)
-            val env4 = env3.extend(parent, stats.map(_.symbol).zip(res1).toMap)
+            val (_, env3) = initTraits(env2)
+            val (_, env4) = eval(stats, env3)
             (parent, callSiteEnv.extendHeap(env4))
         }
       }
