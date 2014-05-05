@@ -37,7 +37,7 @@ class ModuleSuite extends FunSuite{
   test("object value capturing") {
     assert(ctfe { val a = 20; object A { val b = 2; object B {def foo(c: Int) = a+b+c}}; A.B.foo(20)} == 42 )
   }
-  
+
   test("object lazy initialization") {
     assert(ctfe { var a = 40; object A { a = 2; val b = 80}; val c = a; A.b-c+a } == 42 )
   }
@@ -50,4 +50,25 @@ class ModuleSuite extends FunSuite{
     assert(ctfe { object A {def f = 42}; object B {def g = A.f}; B.g} == 42)
   }
 
+  test("module cross field references") {
+    assert(ctfe {
+      object A {
+        val a = 100
+        val b = a
+        val c = b - a + 42
+      }
+      A.c
+    } == 42)
+  }
+
+  test("object lazy fields") {
+    assert(ctfe {
+      object A {
+        var v = 100
+        lazy val a = v
+        v = 42
+      }
+      A.a
+    } == 42)
+  }
 }
