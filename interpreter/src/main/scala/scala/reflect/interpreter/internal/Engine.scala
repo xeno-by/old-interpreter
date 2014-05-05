@@ -550,8 +550,15 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     def selectMethod(member: Symbol, env: Env, static: Boolean): Result = {
       // for super calls we select member from a class symbol provided by member itself
       // otherwise lookup a member from stored class symbol
-      val mem = if (static)
+      val mem = if (static && !member.isAbstract)
         member
+      else if (static && member.isAbstract) {
+        // FIXME: an attempt on abstract override lookup, extremely dirty hack
+        // tl;dr find first non-abstract method(matching signature) among linearized parents of saved ClassSymbol
+        val symbols = sym.typeSignature.baseClasses.map(_.typeSignature.member(member.name).alternatives.find(alt => alt.typeSignature == member.typeSignature).getOrElse(null))
+        val bases = symbols.collect({case m: MethodSymbol => m}).filter(m => !m.isAbstractOverride && !m.isAbstract)
+        bases.head
+      }
       else
         sym.typeSignature.member(member.name).alternatives.find(alt => alt.typeSignature == member.typeSignature).get
       env.heap.get(this) match {
