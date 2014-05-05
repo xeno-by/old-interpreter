@@ -18,11 +18,21 @@ class OOSuite extends FunSuite {
     assert(ctfe { class A {val v = 42}; class B extends A; (new B).v } == 42)
   }
 
-  test("multiple field inheritance") {
+  test("multiple method inheritance") {
     assert(ctfe {
       trait A{def a = 10}
       trait B{def b = 30}
       trait C{def c = 2}
+      class F extends A with B with C {def f = a+b+c}
+      (new F).f
+    } == 42)
+  }
+
+  test("multiple field inheritance") {
+    assert(ctfe {
+      trait A{val a = 10}
+      trait B{val b = 30}
+      trait C{val c = 2}
       class F extends A with B with C {def f = a+b+c}
       (new F).f
     } == 42)
@@ -59,7 +69,7 @@ class OOSuite extends FunSuite {
     } == 42)
   }
 
-  test("runtime polymorphism simple") {
+  test("dynamic dispatch simple") {
     assert(ctfe { class A{def f() = 100}; class B extends A{override def f() = 42}; (new B).f() } == 42)
   }
 
@@ -67,7 +77,7 @@ class OOSuite extends FunSuite {
     assert(ctfe { class A{def f() = 100}; class B extends A{override def f() = super.f()+42}; (new B).f() } == 142)
   }
 
-  test("polymorphic method call") {
+  test("dynamic dispatch with parent type") {
     assert(ctfe {
       class A { def f() = 100}
       class B extends A { override def f() = 42}
@@ -76,7 +86,7 @@ class OOSuite extends FunSuite {
     } == 42)
   }
 
-  test("overloaded select") {
+  test("overloaded dynamic dispatch") {
     assert(ctfe {
       class A{ def f = 100; def f(a: Int) = a + 100}
       class B extends A{ override def f = 999; override def f(a: Int) = a}
@@ -93,7 +103,40 @@ class OOSuite extends FunSuite {
     } == 42)
   }
 
-  test("runtime polymorphism with a callback") {
+  test("val overriding def of class") {
+    assert(ctfe {
+      class A{def v = 999}
+      class B extends A{val v = 42}
+      (new B).v
+    } == 42)
+  }
+
+  test("val overriding def of trait") {
+    assert(ctfe {
+      trait A{def v: Int}
+      class B extends A{val v = 42}
+      (new B).v
+    } == 42)
+  }
+
+
+  test("lazy val overriding def of class") {
+    assert(ctfe {
+      class A{def v = 999}
+      class B extends A{lazy val v = 42}
+      (new B).v
+    } == 42)
+  }
+
+  test("lazy val overriding def of trait") {
+    assert(ctfe {
+      trait A{def v: Int}
+      class B extends A{lazy val v = 42}
+      (new B).v
+    } == 42)
+  }
+
+  test("dynamic dispatch with a callback") {
     assert(ctfe {
       class A { def f() = 999; def g() = f() + 2}
       class B extends A {override def f() = 40}
@@ -141,11 +184,29 @@ class OOSuite extends FunSuite {
     } == 42)
   }
 
+  test("class with early definitions") {
+    assert(ctfe {
+      trait C{val x = 100}
+      class D extends {override val x = 42} with C
+      (new D).x
+    } == 42)
+  }
+
   test("anonymous class with early definitions") {
     assert(ctfe {
       trait F {val x: Int}
       val v = new {val x = 42} with F
       v.x
+    } == 42)
+  }
+
+  test("abstract override") {
+    assert(ctfe {
+      trait Foo { def f: Int }
+      trait M extends Foo { abstract override def f = 22 + super.f }
+      class FooImpl1 extends Foo { override def f = 20 }
+      class FooImpl2 extends FooImpl1 with M
+      (new FooImpl2).f
     } == 42)
   }
 
