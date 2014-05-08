@@ -65,4 +65,30 @@ class FunctionSuite extends FunSuite{
     assert(ctfe { def f = 40; val v = f; v+2 } == 42)
   }
 
+  test("return statement simple") {
+    assert(ctfe {
+      def f: Int = {
+        return 42
+        999
+      }
+      f
+    } == 42)
+  }
+
+
+  test("return from while") {
+    assert(ctfe {
+      def f: Int = { while (true) { return 42 }; 999 }
+      f
+    } == 42)
+  }
+
+  test("nested return") {
+    assert(ctfe {
+      def g: Int = { return 42; 999 }
+      def f: Int = { return g; 888 }
+      f
+    } == 42)
+  }
+
 }
