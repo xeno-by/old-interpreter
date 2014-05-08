@@ -44,7 +44,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // case q"(..$exprs)"                     => never going to happen, because parser desugars these trees into applications
     case q"if ($cond) $then1 else $else1"     => evalIf(cond, then1, else1, env)
     case q"$scrut match { case ..$cases }"    => evalMatch(scrut, cases, env)
-    case q"try $expr catch { case ..$cases } finally $finally1" => evalCatch(expr, cases, finally1, env)
+    case q"try $expr catch { case ..$cases } finally $finally1" => evalTryCatch(expr, cases, finally1, env)
     case q"(..$params) => $body"              => Value.function(params, body, env)
     // case q"{ case ..$cases }"              => never going to happen, because typer desugars these trees into anonymous class instantiations
     case q"while ($cond) $body"               => evalWhile(cond, body, env)
@@ -199,7 +199,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       vexpr.apply(vargs, env2)
     } catch {
       case ReturnException(ret) => ret
-      case other: Throwable => IllegalState(other)
+      case other: Throwable => throw other
     }
   }
 
@@ -230,6 +230,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   case class ReturnException(value: Result) extends Throwable
+  case class WrappedExceptionException(ex: Result) extends Throwable
 
   def evalReturn(expr: Tree, env: Env): Result = {
     val ret = eval(expr, env)
@@ -237,11 +238,19 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   def evalThrow(tree: Tree, env: Env): Result = {
-    ???
+    val res = eval(tree, env)
+    throw WrappedExceptionException(res)
   }
 
-  def evalCatch(expr: Tree, cases: List[CaseDef], fin: Tree, env: Env): Result = {
-    ???
+  def evalTryCatch(tryBlock: Tree, cases: List[CaseDef], finally1: Tree, env: Env): Result = {
+    try {
+      eval(tryBlock, env)
+    } catch {
+      case WrappedExceptionException(excres) =>
+        val (exceptionVal: Value, exceptionEnv) = excres
+        evalMatch(q"$exceptionVal", cases, env.extendHeap(exceptionEnv).extend(NoSymbol, exceptionVal))
+      case other: Throwable => throw other
+    }
   }
 
   def evalMatch(scrut: Tree, cases: List[CaseDef], env: Env): Result = {
@@ -363,7 +372,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
             }
           } catch {
             case ReturnException(res) => res
-            case e: Throwable         => IllegalState(e)
+            case e: Throwable         => throw e
           }
       }
     }
@@ -549,7 +558,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         (parent, env1)
       }
       def initTraits(env: Env): Result = {
-        val traits = sym.typeSignature.baseClasses.filter(_.asClass.isTrait).reverse
+        val traits = sym.typeSignature.baseClasses.filter(t=> t.asClass.isTrait && !t.isJava).reverse
         val env1 = traits.foldLeft(env)((newEnv, newTrait) => initTrait(newTrait, newEnv)._2)
         (parent, env1)
       }

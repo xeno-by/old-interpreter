@@ -38,6 +38,7 @@ trait Emulators {
           case Any_hashCode     => unaryOp[Any](_.hashCode())
           case Object_hashcode  => unaryOp[java.lang.Object](java.util.Objects.hashCode(_))
           case Object_init      => dummyOp
+          case Throwable_init   => dummyOp
           case other            => UnsupportedEmulation(sym)
         }
       })
