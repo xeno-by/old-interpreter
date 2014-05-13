@@ -44,7 +44,7 @@ trait Emulators {
           case Any_equals       => binOp[Any, Any](_.equals(_))
           case Any_isInstanceOf => binOp[Any, Type](_.getClass == _.getClass)
           case Any_hashCode     => unaryOp[Any](_.hashCode())
-          case Object_hashcode  => unaryOp[java.lang.Object](java.util.Objects.hashCode(_))
+          case Object_hashcode  => unaryOp[java.lang.Object](_.hashCode())
           case Object_init      => dummyOp
           case Throwable_init   => dummyOp
           case other            => UnsupportedEmulation(sym)
@@ -100,7 +100,10 @@ trait Emulators {
             Value.reflect((), env)
           }
         ) { override def isZeroArg = false }, env)
-      } else ???
+      } else if (member.name.toString == "length") (new EmulatedCallableValue(
+        (args: List[Value], env: Env) => Value.reflect(data.length, env)
+      ) { override def isZeroArg = true }, env)
+      else ???
     }
   }
 
