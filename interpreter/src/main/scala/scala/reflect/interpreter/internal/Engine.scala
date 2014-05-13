@@ -3,6 +3,7 @@ package internal
 
 import scala.annotation.tailrec
 import scala.collection.immutable.ListMap
+import scala.runtime.AbstractFunction1
 
 abstract class Engine extends InterpreterRequires with Definitions with Errors with Emulators {
   import u._
@@ -95,28 +96,25 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
   }
 
+  def defaultValue(tpe: Type, env: Env): Result = tpe match {
+    case tpe if tpe == UnitTpe    => Value.reflect((), env)
+    case tpe if tpe == BooleanTpe => Value.reflect(false, env)
+    case tpe if tpe == FloatTpe   => Value.reflect(0.0f, env)
+    case tpe if tpe == DoubleTpe  => Value.reflect(0.0d, env)
+    case tpe if tpe == ByteTpe    => Value.reflect(0.toByte, env)
+    case tpe if tpe == ShortTpe   => Value.reflect(0.toShort, env)
+    case tpe if tpe == IntTpe     => Value.reflect(0, env)
+    case tpe if tpe == LongTpe    => Value.reflect(0L, env)
+    case tpe if tpe == CharTpe    => Value.reflect(0.toChar, env)
+    case _                        => Value.reflect(null, env)
+  }
+
   def evalLocal(tree: Tree, env: Env): Result = {
-    val sym = tree.symbol
-    def defaultValue(tpe: Type): Result = {
-      val jvmValue = tpe match {
-        case tpe if tpe == UnitTpe    => ()
-        case tpe if tpe == BooleanTpe => false
-        case tpe if tpe == FloatTpe   => 0.0f
-        case tpe if tpe == DoubleTpe  => 0.0d
-        case tpe if tpe == ByteTpe    => 0.toByte
-        case tpe if tpe == ShortTpe   => 0.toShort
-        case tpe if tpe == IntTpe     => 0
-        case tpe if tpe == LongTpe    => 0L
-        case tpe if tpe == CharTpe    => 0.toChar
-        case _                        => null
-      }
-      Value.reflect(jvmValue, env)
-    }
     tree match {
       case ValDef(mods, _, tpt, rhs) =>
         // note how we bind ValDef's name to the default value of the corresponding type when evaluating the rhs
         // this is how Scala does it, so don't say that this looks weird :)
-        val (vdefault, envx) = defaultValue(tpt.tpe)
+        val (vdefault, envx) = defaultValue(tpt.tpe, env)
         val (res, env1) = if (!mods.hasFlag(Flag.LAZY))
           eval(rhs, envx.extend(tree.symbol, vdefault))
         else
@@ -168,14 +166,19 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   def evalSelect(qual: Tree, sym: Symbol, env: Env): Result = {
-    val (vqual, env1) = eval(qual, env)
-    val (value, env2) = qual match {
-      case _:Super  => vqual.select(sym, env1, static = true)
-      case _        => vqual.select(sym, env1)
+    val (value, env2) = if (qual.symbol == null || !qual.symbol.isPackage) {
+      val (vqual, env1) = eval(qual, env)
+      qual match {
+        case _: Super => vqual.select(sym, env1, static = true)
+        case _        => vqual.select(sym, env1)
+      }
+    } else {
+      if (sym.isModule) Value.module(sym.asModule, env)
+      else ??? // FIXME: other usecases of selection from package
     }
     value match {
-      case MethodValue(meth, _) if meth.paramLists.isEmpty => value.apply(Nil, env2)
-      case _                    => (value, env2)
+      case f: CallableValue if f.isZeroArg => f.apply(Nil, env2)
+      case _                               => (value, env2)
     }
   }
 
@@ -365,10 +368,9 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         case _                                   =>
           try {
             stack.head.get(sym) match {
-              case Some(f: FunctionValue) if f.paramss.isEmpty        => f.apply(Nil, this)
-              case Some(f: MethodValue)   if f.sym.paramLists.isEmpty => f.apply(Nil, this)
-              case Some(other)                                        => (other, this)
-              case None                                               => IllegalState(sym)
+              case Some(f: CallableValue) if f.isZeroArg  => f.apply(Nil, this)
+              case Some(other)                            => (other, this)
+              case None                                   => IllegalState(sym)
             }
           } catch {
             case ReturnException(res) => res
@@ -483,14 +485,12 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     override def toString = s"JvmValue#" + id
   }
 
-  sealed trait CallableValue extends Value {
-  }
-
-  case class EmulatedCallableValue(f: (List[Value], Env) => Result) extends CallableValue {
-    override def apply(args: List[Value], env: Env) = f(args, env)
+  trait CallableValue extends Value {
+    def isZeroArg: Boolean
   }
 
   case class FunctionValue(paramss: List[List[Symbol]], body: Tree, capturedEnv: Env) extends CallableValue {
+    override def isZeroArg: Boolean = paramss.isEmpty
     override def apply(args: List[Value], callSiteEnv: Env): Result = {
       val env1 = callSiteEnv.pushFrame(capturedEnv)
       paramss match {
@@ -519,6 +519,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       val src = source(sym).asInstanceOf[DefDef].rhs
       FunctionValue(sym.paramLists, src, capturedEnv.extend(sym, this)).apply(args, callSiteEnv)
     }
+    override def isZeroArg: Boolean = sym.paramLists.isEmpty
     override def toString = s"MethodValue#" + id
   }
 
@@ -567,6 +568,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         paramss match {
           case x :: Nil => // single parameter list - invoke
             val (_, env2) = eval(body, callSiteEnv.extend(parent, x.zip(args).toMap)) // body contains only super.ctor call
+            // FIXME: possible initialization order bug
             val (_, env3) = initTraits(env2)  // trait initialization is not inlined in trees passed to us
             val (_, env4) = eval(stats, env3) // rest of ctor exprs goes into stats
             (parent, callSiteEnv.extendHeap(env4))
@@ -645,7 +647,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
     override def init(env: Env): (Value, Env) = {
       val v = new ModuleValue(mod)
-      val (_, env1) = collectFields(mod.typeSignature.baseClasses.filter(!_.isModuleClass),
+      val (_, env1) = collectFields(mod.typeSignature.baseClasses.filter(it => !it.isModuleClass && !it.isJava && it != AnyClass),
         // point all parent symbol references to this instance and allocate object in heap
         mod.typeSignature.baseClasses.foldLeft(env)((tmpEnv, s) => tmpEnv.extend(s, v)).extend(v, new Object(ListMap())))
       val (_, env2) = eval(body, env1)
@@ -673,15 +675,13 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       (FunctionValue(List(params.map(_.symbol)), body, env), env)
     }
     def instantiate(tpe: Type, env: Env): Result = {
-      // TODO: instantiate a type (can't use ClassSymbol instead of Type, because we need to support polymorphic arrays)
+      // instantiate a type (can't use ClassSymbol instead of Type, because we need to support polymorphic arrays)
       // not sure whether we need env, because we don't actually call the constructor here, but let's have it just in case
-      val v = new ObjectValue(tpe.typeSymbol, tpe)
-      (v, env.extend(v, new Object(ListMap())))
+      createInstance(tpe, env)
     }
     def module(mod: ModuleSymbol, env: Env): Result = {
       // create an interpreter value that corresponds to the object represented by the symbol
-      val value = new UninitializedModuleValue(mod)
-      (value, env.extend(mod, value))
+      createModule(mod, env)
     }
     def method(meth: MethodSymbol, env: Env): Result = {
       (MethodValue(meth, env), env)

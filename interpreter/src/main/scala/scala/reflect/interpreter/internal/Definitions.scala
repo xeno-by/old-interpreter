@@ -1,11 +1,21 @@
 package scala.reflect.interpreter
 package internal
 
+import scala.collection.immutable.HashSet
+
 trait Definitions {
   self: Engine =>
 
   import u._
   import definitions._
+
+  lazy val emulatedClasses = HashSet[Symbol](
+    NoneModule,
+    symbolOf[Any],
+    symbolOf[Serializable],
+    symbolOf[Function1[_,_]],
+    symbolOf[Product]
+   )
 
   lazy val Any_isInstanceOf = AnyClass.info.decl(TermName("isInstanceOf"))
   lazy val Any_equals = AnyClass.info.decl(TermName("equals"))
