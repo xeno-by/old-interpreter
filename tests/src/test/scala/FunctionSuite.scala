@@ -44,5 +44,59 @@ class FunctionSuite extends FunSuite{
       g(40)(2)
     } == 42)
   }
+  
+  test("multiple parameter list simple") {
+    assert(ctfe { def f(a:Int)(b:Int) = a+b; f(40)(2) } == 42)
+  }
+  
+  test("multiple parameter list currying") {
+    assert(ctfe {
+      def f(a:Int)(b:Int) = a+b
+      val g = f(40)(_)
+      g(2)
+    } == 42)
+  }
+
+  test("zero parameter list") {
+    assert(ctfe { def f = 42; f } == 42)
+  }
+
+  test("zero parameter list eval on lookup") {
+    assert(ctfe { def f = 40; val v = f; v+2 } == 42)
+  }
+
+  test("return statement simple") {
+    assert(ctfe {
+      def f: Int = {
+        return 42
+        999
+      }
+      f
+    } == 42)
+  }
+
+
+  test("return from while") {
+    assert(ctfe {
+      def f: Int = { while (true) { return 42 }; 999 }
+      f
+    } == 42)
+  }
+
+  test("nested return") {
+    assert(ctfe {
+      def g: Int = { return 42; 999 }
+      def f: Int = { return g; 888 }
+      f
+    } == 42)
+  }
+
+  test("return from lambda handled by method") {
+    assert(ctfe {
+      def f(g: => Int) = {g; 888}
+      def k:Int = {f({return 42; 777}); 999}
+      k
+    } == 42)
+  }
 
 }
