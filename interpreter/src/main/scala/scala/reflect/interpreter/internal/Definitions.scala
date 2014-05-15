@@ -1,28 +1,18 @@
 package scala.reflect.interpreter
 package internal
 
-import scala.collection.immutable.HashSet
-
 trait Definitions {
   self: Engine =>
 
   import u._
   import definitions._
 
-  lazy val emulatedClasses = HashSet[Symbol](
-    NoneModule,
-    symbolOf[Any],
-    symbolOf[Serializable],
-    symbolOf[Function1[_,_]],
-    symbolOf[Product]
-   )
-
   lazy val Any_isInstanceOf = AnyClass.info.decl(TermName("isInstanceOf"))
   lazy val Any_equals = AnyClass.info.decl(TermName("equals"))
   lazy val Any_hashCode = AnyClass.info.decl(TermName("hashCode"))
   lazy val Object_eq = ObjectClass.info.decl(TermName("eq"))
   lazy val Object_hashcode = ObjectClass.info.decl(TermName("hashCode"))
-  lazy val Object_init = ObjectClass.info.decl(TermName("<init>"))
+  lazy val Object_init = ObjectClass.info.decl(termNames.CONSTRUCTOR)
   lazy val Option_isDefined = OptionClass.info.decl(TermName("isDefined"))
   lazy val Option_get = OptionClass.info.decl(TermName("get"))
 

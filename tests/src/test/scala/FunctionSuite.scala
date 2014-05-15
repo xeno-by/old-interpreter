@@ -91,4 +91,12 @@ class FunctionSuite extends FunSuite{
     } == 42)
   }
 
+  test("return from lambda handled by method") {
+    assert(ctfe {
+      def f(g: => Int) = {g; 888}
+      def k:Int = {f({return 42; 777}); 999}
+      k
+    } == 42)
+  }
+
 }

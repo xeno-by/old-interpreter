@@ -15,10 +15,12 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // which is why we can't test the interpreter on the output of reify
     // TODO: in Palladium this will become irrelevant, because all trees
     // are going to have a `Tree.tpe` method that will actually typecheck stuff if necessary
-//    tree.foreach(sub => {
-//      if (sub.tpe == null) UnattributedAst(sub)
-//      if (sub.symbol == NoSymbol) UnattributedAst(sub)
-//    })
+    tree.foreach {
+      case Ident(termNames.WILDCARD)     =>
+      case sub if sub.tpe == null        => UnattributedAst(sub)
+      case sub if sub.symbol == NoSymbol => UnattributedAst(sub)
+      case _                             =>
+    }
     val initialEnv = Env(List(ListMap()), ListMap())
     val (value, finalEnv) = eval(tree, initialEnv)
     val (result, _) = value.reify(finalEnv)
@@ -31,8 +33,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     case Literal(_)                           => evalLiteral(tree, env)
     case New(_)                               => Value.instantiate(tree.tpe, env)
     case Ident(_)                             => env.lookup(tree.symbol) // q"$_" would've matched any tree, not just an ident
+    case s: Super                             => eval(s.qual, env)
     case q"$qual.$_"                          => evalSelect(qual, tree.symbol, env)
-//    case q"$qual.super[$_].$_"                => evalSelect(q"$qual.this", tree.symbol, env)
     case q"$_.this"                           => env.lookup(tree.symbol)
     case q"$expr.isInstanceOf[$tpt]"          => evalTypeTest(expr, tpt.tpe, env)
     case q"$expr.asInstanceOf[$tpt]"          => evalTypeCast(expr, tpt.tpe, env)
@@ -50,7 +52,6 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // case q"{ case ..$cases }"              => never going to happen, because typer desugars these trees into anonymous class instantiations
     case q"while ($cond) $body"               => evalWhile(cond, body, env)
     case q"do $body while ($cond)"            => evalDoWhile(cond, body, env)
-    case s: Super                             => eval(s.qual, env)
     case _: Block                             => evalBlock(tree.children, env) // qq feature workaround(lazy value wrapper functions skipped in stats)
     // case q"for (..$enums) $expr"           => never going to happen, because parser desugars these trees into applications
     // case q"for (..$enums) yield $expr"     => never going to happen, because parser desugars these trees into applications
@@ -77,7 +78,6 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     // we only support literal types that we are interested in
     // sure we could say `case Literal(Constant(x)) => reflect(x)`
     // but that would make evaluation less safe
-//    def reflect[T](jvmValue: T) = Value.reflect(jvmValue, env)
     tree match {
       case q"${x: Byte}"                  => Value.reflect(x, env)
       case q"${x: Short}"                 => Value.reflect(x, env)
@@ -109,8 +109,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     case _                        => Value.reflect(null, env)
   }
 
-  def evalLocal(tree: Tree, env: Env): Result = {
-    tree match {
+  def evalLocalDef(tree: Tree, env: Env): Result = {
+    val (vrepr, env1) = tree match {
       case ValDef(mods, _, tpt, rhs) =>
         // note how we bind ValDef's name to the default value of the corresponding type when evaluating the rhs
         // this is how Scala does it, so don't say that this looks weird :)
@@ -125,21 +125,16 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       case tree: ModuleDef =>
         Value.module(tree.symbol.asModule, env)
     }
-  }
-
-  def evalLocalDef(tree: Tree, env: Env): Result = {
-    val (vrepr, env1) = evalLocal(tree, env)
     tree.symbol.owner match {
       case cd:ClassSymbol =>
+        val (instance, env2) = env1.lookup(cd)
+        (vrepr, env.extendHeap(env2).extend(instance, tree.symbol, vrepr))
+      case cd:ModuleSymbol =>
         val (instance, env2) = env1.lookup(cd)
         (vrepr, env.extendHeap(env2).extend(instance, tree.symbol, vrepr))
       case _              =>
         (vrepr, env.extendHeap(env1).extend(tree.symbol, vrepr))
     }
-  }
-
-  def evalClassDef(tree: Tree, env: Env): Result = {
-    Value.reflect((), env)
   }
 
   def evalAssign(lhs: Tree, rhs: Tree, env: Env): Result = {
@@ -168,16 +163,13 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   def evalSelect(qual: Tree, sym: Symbol, env: Env): Result = {
     val (value, env2) = if (qual.symbol == null || !qual.symbol.isPackage) {
       val (vqual, env1) = eval(qual, env)
-      qual match {
-        case _: Super => vqual.select(sym, env1, static = true)
-        case _        => vqual.select(sym, env1)
-      }
+      vqual.select(sym, env1, static = qual.isInstanceOf[Super])
     } else {
       if (sym.isModule) Value.module(sym.asModule, env)
       else ??? // FIXME: other usecases of selection from package
     }
     value match {
-      case f: CallableValue if f.isZeroArg => f.apply(Nil, env2)
+      case f: CallableValue if f.isNullary => f.apply(Nil, env2)
       case _                               => (value, env2)
     }
   }
@@ -193,17 +185,14 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   def evalApply(expr: Tree, args: List[Tree], env: Env): Result = {
-    // named and default argss are already desugared by scalac, so we just perform straightforward evaluation
+    // named and default args are already desugared by scalac, so we just perform straightforward evaluation
     // TODO: this will not be the case for palladium, but we'll see to that later
     // TODO: need to handle varargs (represented by q"arg: _*")
     val (vexpr, env1) = eval(expr, env)
     val (vargs, env2) = eval(args, env1)
     try {
       vexpr.apply(vargs, env2)
-    } catch {
-      case ReturnException(ret) => ret
-      case other: Throwable => throw other
-    }
+    } catch { case e@ReturnException(ret) => if (vexpr.isInstanceOf[MethodValue]) ret else throw e }
   }
 
   def evalIf(cond: Tree, then1: Tree, else1: Tree, env: Env): Result = {
@@ -232,8 +221,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     evalWhile(cond, body, bodyEnv)
   }
 
-  case class ReturnException(value: Result) extends Throwable
-  case class WrappedExceptionException(ex: Result) extends Throwable
+  case class ReturnException(value: Result) extends Exception
+  case class WrappedException(ex: Result) extends Exception
 
   def evalReturn(expr: Tree, env: Env): Result = {
     val ret = eval(expr, env)
@@ -242,17 +231,16 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
 
   def evalThrow(tree: Tree, env: Env): Result = {
     val res = eval(tree, env)
-    throw WrappedExceptionException(res)
+    throw WrappedException(res)
   }
 
   def evalTryCatch(tryBlock: Tree, cases: List[CaseDef], finally1: Tree, env: Env): Result = {
     try {
       eval(tryBlock, env)
     } catch {
-      case WrappedExceptionException(excres) =>
+      case WrappedException(excres) =>
         val (exceptionVal: Value, exceptionEnv) = excres
         evalMatch(q"$exceptionVal", cases, env.extendHeap(exceptionEnv).extend(NoSymbol, exceptionVal))
-      case other: Throwable => throw other
     }
   }
 
@@ -368,14 +356,11 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         case _                                   =>
           try {
             stack.head.get(sym) match {
-              case Some(f: CallableValue) if f.isZeroArg  => f.apply(Nil, this)
+              case Some(f: CallableValue) if f.isNullary  => f.apply(Nil, this)
               case Some(other)                            => (other, this)
               case None                                   => IllegalState(sym)
             }
-          } catch {
-            case ReturnException(res) => res
-            case e: Throwable         => throw e
-          }
+          } catch { case ReturnException(res) => res }
       }
     }
     def extend(sym: Symbol, value: Value): Env = {
@@ -413,12 +398,6 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
   }
 
-  class ObjectEnv(stack: FrameStack, heap: Heap, symbolMappings: Map[Symbol, Symbol]) extends Env(stack, heap) {
-    override def lookup(sym: Symbol): (Value, Env) = {
-      super.lookup(symbolMappings.getOrElse(sym, sym))
-    }
-  }
-
   @volatile private var _nextId = new java.util.concurrent.atomic.AtomicInteger()
   private def nextId() = _nextId.incrementAndGet()
 
@@ -441,7 +420,8 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       // if we have an empty-arglist application, then the result of select will be fed into apply(Nil)
       // needs to handle selections of field and method references
       // because e.g. foo.bar(1, 2) looks like Apply(Select(foo, bar), List(1, 2))
-      (selectCallable(this, member, env), env)
+      if (member.isMethod) (selectCallable(this, member, env), env)
+      else ???
     }
     def apply(args: List[Value], env: Env): Result = {
       // needs to work well both with functions and method references
@@ -460,7 +440,10 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     }
     def typeTest(tpe: Type, env: Env): Result = {
       // can't use a symbol here, because this can be an array. use tpe.erasure if in doubt
-      if (tpt <:< tpe) Value.reflect(true, env) else Value.reflect(false, env)
+      if (tpt.typeSymbol == ArrayClass)
+        if (tpt <:< tpe) Value.reflect(true, env) else Value.reflect(false, env)
+      else
+        if (tpt.erasure <:< tpe.erasure) Value.reflect(true, env) else Value.reflect(false, env)
     }
     def typeCast(tpe: Type, env: Env): Result = {
       // TODO: can't be a no-op, because we actually need to throw if the type is incompatible
@@ -486,11 +469,11 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
   }
 
   trait CallableValue extends Value {
-    def isZeroArg: Boolean
+    def isNullary: Boolean
   }
 
   case class FunctionValue(paramss: List[List[Symbol]], body: Tree, capturedEnv: Env) extends CallableValue {
-    override def isZeroArg: Boolean = paramss.isEmpty
+    override def isNullary: Boolean = paramss.isEmpty
     override def apply(args: List[Value], callSiteEnv: Env): Result = {
       val env1 = callSiteEnv.pushFrame(capturedEnv)
       paramss match {
@@ -519,18 +502,18 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       val src = source(sym).asInstanceOf[DefDef].rhs
       FunctionValue(sym.paramLists, src, capturedEnv.extend(sym, this)).apply(args, callSiteEnv)
     }
-    override def isZeroArg: Boolean = sym.paramLists.isEmpty
+    override def isNullary: Boolean = sym.paramLists.isEmpty
     override def toString = s"MethodValue#" + id
   }
 
   class ObjectValue(sym: Symbol, tpe: Type) extends TypedValue(tpe) {
-    val body = source(sym).children.head.asInstanceOf[Template].body
+    val body = source(sym).asInstanceOf[ImplDef].impl.body
     class ObjectCtor(parent: ObjectValue, sym: MethodSymbol, capturedEnv: Env) extends MethodValue(sym, capturedEnv) {
       def extractConsArgs(tree: MemberDef, argss: List[List[ValDef]]): List[List[Symbol]] = {
-        // workaround constructor argss symbol resolution bug
+        // workaround constructor argss symbol resolution
         // extract symbols from valdefs of class body by name
-        // FIXME: there seems to be another bug, this time with names: an extra whitespace is appended to name in valdef symbol
-        val valDefs = tree.asInstanceOf[ImplDef].impl.body.collect({case d: ValDef => d}).map(it=>(it.name.toString.trim, it)).toMap
+        // an extra whitespace is appended to name in valdef symbol
+        val valDefs = body.collect({case d: ValDef => d}).map(it=>(it.name.toString.trim, it)).toMap
         argss.map(args => args.map(arg => valDefs(arg.name.toString).symbol))
       }
       override def apply(args: List[Value], env: Env): (Value, Env) = {
@@ -552,11 +535,12 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       extends FunctionValue(paramss, body, capturedEnv) {
       def initTrait(target: Symbol, env: Env): Result = {
         val traitSrc: MemberDef = source(target)
-        val stats:List[Tree] = traitSrc match {
-          case q"$_ trait $name extends { ..$earlydefns } with ..$parents  { $_ => ..$stats }" => stats
+        val (stats:List[Tree], earlydefns) = traitSrc match {
+          case q"$_ trait $name extends { ..$earlydefns } with ..$parents  { $_ => ..$stats }" => (stats, earlydefns)
         }
-        val env1 = eval(stats, env)._2
-        (parent, env1)
+        val env1 = eval(earlydefns, env)._2
+        val env2 = eval(stats, env1)._2
+        (parent, env2)
       }
       def initTraits(env: Env): Result = {
         val traits = sym.typeSignature.baseClasses.filter(t=> t.asClass.isTrait && !t.isJava).reverse
@@ -568,7 +552,6 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         paramss match {
           case x :: Nil => // single parameter list - invoke
             val (_, env2) = eval(body, callSiteEnv.extend(parent, x.zip(args).toMap)) // body contains only super.ctor call
-            // FIXME: possible initialization order bug
             val (_, env3) = initTraits(env2)  // trait initialization is not inlined in trees passed to us
             val (_, env4) = eval(stats, env3) // rest of ctor exprs goes into stats
             (parent, callSiteEnv.extendHeap(env4))
@@ -589,7 +572,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       val mem = if (static && !member.isAbstract)
         member
       else if (static && member.isAbstract) {
-        // FIXME: an attempt on abstract override lookup, extremely dirty hack
+        // FIXME: an attempt on abstract override lookup, hack
         // tl;dr find first non-abstract method(matching signature) among linearized parents of saved ClassSymbol
         val symbols = sym.typeSignature.baseClasses.map(_.typeSignature.member(member.name).alternatives.find(alt => alt.typeSignature == member.typeSignature).getOrElse(null))
         val bases = symbols.collect({case m: MethodSymbol => m}).filter(m => !m.isAbstractOverride && !m.isAbstract)
@@ -599,7 +582,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
         sym.typeSignature.member(member.name).alternatives.find(alt => alt.typeSignature == member.typeSignature).get
       env.heap.get(this) match {
         case Some(Object(fields)) => (fields.getOrElse(mem, MethodValue(mem.asMethod, env)), env)
-        case Some(_: Primitive)   => IllegalState(this, "an object couldn't be a primitive")
+        case Some(_: Primitive)   => IllegalState(this, "a primitive couldn't have fields")
         case _ => IllegalState(this)
       }
     }
@@ -621,7 +604,7 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
     override def toString = s"ObjectValue#" + id
   }
   
-  class UninitializedModuleValue(mod: ModuleSymbol) extends ObjectValue(mod, mod.typeSignature) {
+  class UninitializedModuleValue(mod: ModuleSymbol) extends ModuleValue(mod) {
     override def select(member: Symbol, env: Env, static: Boolean = false): (Value, Env) = {
       val (res, env1) = init(env)
       res.select(member, env.extend(mod, res).extendHeap(env1))
@@ -632,7 +615,6 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
           // java classes have no obtainable source
           if (x.isJava) Value.reflect((), env)
           else {
-            // assuming result of baseClasses is correctly linearized
             val (_, env1) = collectFields(xs, env)
             val body: List[Tree] = source(x) match {
               case cd: ClassDef   => cd.impl.body
@@ -649,16 +631,23 @@ abstract class Engine extends InterpreterRequires with Definitions with Errors w
       val v = new ModuleValue(mod)
       val (_, env1) = collectFields(mod.typeSignature.baseClasses.filter(it => !it.isModuleClass && !it.isJava && it != AnyClass),
         // point all parent symbol references to this instance and allocate object in heap
-        mod.typeSignature.baseClasses.foldLeft(env)((tmpEnv, s) => tmpEnv.extend(s, v)).extend(v, new Object(ListMap())))
+        mod.typeSignature.baseClasses.foldLeft(env)((tmpEnv, s) => tmpEnv.extend(s, v)).extend(mod,v).extend(v, new Object(ListMap())))
       val (_, env2) = eval(body, env1)
       (v, env.extendHeap(env2))
     }
     override def toString = s"UninitializedModuleValue#" + id
   }
 
-  class ModuleValue(mod: ModuleSymbol) extends ObjectValue(mod, mod.typeSignature) {
+  class ModuleValue(val mod: ModuleSymbol) extends ObjectValue(mod, mod.typeSignature) {
     override def init(env: Env): Result = (this, env)
     override def toString = s"ModuleValue#" + id
+//    override def hashCode() = mod.hashCode()
+//    override def equals(obj: scala.Any): Boolean = {
+//      if (this == obj) return true
+//      if (obj == null) return false
+//      if (!obj.isInstanceOf[ModuleValue]) false
+//      else obj.asInstanceOf[ModuleValue].mod == this.mod
+//    }
   }
 
   object Value {

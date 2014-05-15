@@ -71,4 +71,14 @@ class ModuleSuite extends FunSuite{
       A.a
     } == 42)
   }
+
+//  test("module reinitialization") {
+//    assert(ctfe {
+//      object A {var v = 888}
+//      def f = A.v = 42
+//      f
+//      A.v
+//    } == 42)
+//  }
+
 }
