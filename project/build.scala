@@ -122,6 +122,7 @@ object build extends Build {
   ) settings (
     publishableSettings: _*
   ) settings (
+    scalaSource in Compile <<= (baseDirectory in Compile)(base => base),
     // TODO: this dependency is temporary, just until we have reflection core ready
     libraryDependencies <+= (scalaVersion)("org.scala-lang" % "scala-reflect" % _),
     scalacOptions ++= Seq()
