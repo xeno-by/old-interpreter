@@ -121,8 +121,7 @@ object build extends Build {
     publishableSettings: _*
   ) settings (
     scalaSource in Compile <<= (baseDirectory in Compile)(base => base),
-    // TODO: this dependency is temporary, just until we have reflection core ready
-    libraryDependencies <+= (scalaVersion)("org.scala-lang" % "scala-reflect" % _),
+    libraryDependencies += "org.scalareflect" % "core_2.11" % "0.1.0-SNAPSHOT",
     scalacOptions ++= Seq()
   )
 
@@ -144,6 +143,8 @@ object build extends Build {
   ) settings (
     libraryDependencies += "org.scalatest" %% "scalatest" % "2.1.3" % "test",
     libraryDependencies += "org.scalacheck" %% "scalacheck" % "1.11.3" % "test",
+    libraryDependencies += "org.scalareflect" % "core_2.11" % "0.1.0-SNAPSHOT",
+    addCompilerPlugin("org.scalareflect" % "scalahost_2.11.0" % "0.1.0-SNAPSHOT"),
     packagedArtifacts := Map.empty,
     scalacOptions ++= Seq()
   ) dependsOn (interpreter)

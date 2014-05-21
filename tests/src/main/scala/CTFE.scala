@@ -1,24 +1,23 @@
 import scala.language.experimental.macros
-import scala.reflect.macros.blackbox.Context
-import scala.reflect.interpreter._
+import scala.reflect.core._
+import scala.reflect.semantic._
+import scala.reflect.eval._
+import errors.throwExceptions
 
 object ctfe {
-  def apply[T](x: T): T = macro impl
-  def impl(c: Context)(x: c.Tree) = {
-    import c.universe._
-    // TODO: needs runtime code execution to support the general case
-    interpret(c)(x) match {
-      case x: Byte => q"$x"
-      case x: Short => q"$x"
-      case x: Char => q"$x"
-      case x: Int => q"$x"
-      case x: Long => q"$x"
-      case x: Float => q"$x"
-      case x: Double => q"$x"
-      case x: Boolean => q"$x"
-      case x: Unit => q"$x"
-      case x: String => q"$x"
-      case _ => c.abort(c.enclosingPosition, s"unsupported evaluation result: $x")
+  macro apply[T](x: T): T = {
+    x.eval match {
+      case x: Byte => Lit.Int(x)
+      case x: Short => Lit.Int(x)
+      case x: Char => Lit.Char(x)
+      case x: Int => Lit.Int(x)
+      case x: Long => Lit.Long(x)
+      case x: Float => Lit.Float(x)
+      case x: Double => Lit.Double(x)
+      case x: Boolean => Lit.Bool(x)
+      case x: Unit => Lit.Unit()
+      case x: String => Lit.String(x)
+      case _ => c.abort(s"unsupported evaluation result: $x")
     }
   }
 }
