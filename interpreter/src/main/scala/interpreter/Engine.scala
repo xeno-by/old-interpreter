@@ -1,5 +1,5 @@
-package scala.reflect.eval
-package internal
+package scala.reflect.internal.eval
+package interpreter
 
 import scala.reflect.core._
 
@@ -16,7 +16,6 @@ object Interpreter {
       case Lit.Symbol(value) => value
       case Lit.Null() => null
       case Lit.Unit() => ()
-      case Term.Apply(Term.Apply(Term.Name(meth), Lit.String(value) :: Nil), _) if meth == "scala.reflect.core.Lit.String.apply" => Lit.String(value)
       case _ => sys.error(s"""
         |unsupported tree:
         |${term.showCode}

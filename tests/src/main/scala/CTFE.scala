@@ -1,7 +1,7 @@
 import scala.language.experimental.macros
 import scala.reflect.core._
 import scala.reflect.semantic._
-import scala.reflect.eval._
+import scala.reflect.internal.eval._
 import errors.throwExceptions
 
 object ctfe {
